@@ -1,9 +1,13 @@
 # Root allowlist: only keep these project folders and this file.
 /*
 !/.gitignore
+!/AGENTS.md
 !/docs/
 !/food-label-analyzer/
 !/food-label-frontend/
+
+# Local Codex skills stay on this machine only.
+/SKILLS/
 
 # Python
 **/__pycache__/

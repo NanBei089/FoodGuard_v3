@@ -527,64 +527,6 @@ def _build_rag_lookup(rag_results_json: dict[str, Any]) -> dict[str, dict[str, A
     return lookup
 
 
-def _infer_fallback_risk_legacy(term: str) -> str:
-    lowered = _normalize_ingredient_term(term)
-    if any(keyword in lowered for keyword in ("氢化", "反式", "植脂末")):
-        return "danger"
-    if any(
-        keyword in lowered
-        for keyword in (
-            "糖",
-            "盐",
-            "钠",
-            "油",
-            "脂",
-            "黄油",
-            "奶油",
-            "香精",
-            "香料",
-            "色素",
-            "防腐",
-            "甜味剂",
-            "乳化",
-            "增稠",
-        )
-    ):
-        return "warning"
-    return "safe"
-
-
-def _build_fallback_ingredient_item_legacy(
-    term: str,
-    rag_meta: dict[str, Any] | None,
-) -> dict[str, Any]:
-    function_category = None
-    if isinstance(rag_meta, dict):
-        raw_category = rag_meta.get("function_category")
-        if isinstance(raw_category, str) and raw_category.strip():
-            function_category = raw_category.strip()
-
-    risk = _infer_fallback_risk(term)
-    if risk == "danger":
-        description = (
-            f"识别到{term}，属于需要重点关注的加工配料，建议控制摄入频率并留意同类高负担成分叠加。"
-        )
-    elif risk == "warning":
-        description = (
-            f"识别到{term}，建议结合配料排序、食用量和整体营养负担综合判断，避免长期过量摄入。"
-        )
-    else:
-        description = (
-            f"识别到{term}，当前未见明确高风险信号，但仍建议结合整体配方和个人情况综合判断。"
-        )
-
-    return {
-        "name": term,
-        "risk": risk,
-        "description": description,
-        "function_category": function_category,
-        "rules": [],
-    }
 
 
 _COMMON_INGREDIENT_INFO: dict[str, tuple[str, str | None]] = {

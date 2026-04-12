@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from datetime import datetime, timezone
@@ -556,8 +557,12 @@ async def get_report_list(
     )
     rows = result.all()
 
+    image_urls = await asyncio.gather(
+        *[_build_image_url(row.image_key, row.image_url) for row in rows]
+    )
+
     items: list[ReportListItemSchema] = []
-    for row in rows:
+    for index, row in enumerate(rows):
         llm_output = (
             row.llm_output_json if isinstance(row.llm_output_json, dict) else {}
         )
@@ -571,7 +576,7 @@ async def get_report_list(
                     if isinstance(llm_output.get("summary"), str)
                     else None
                 ),
-                image_url=await _build_image_url(row.image_key, row.image_url),
+                image_url=image_urls[index],
                 created_at=row.created_at,
             )
         )

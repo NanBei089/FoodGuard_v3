@@ -3,6 +3,7 @@ import type { AxiosRequestConfig } from 'axios';
 import type { ApiResponse } from '@/types/api';
 
 let onForceLogout: (() => void) | null = null;
+let refreshPromise: Promise<string | null> | null = null;
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export function setForceLogoutHandler(handler: (() => void) | null) {
@@ -25,41 +26,54 @@ function persistAuthTokens(tokens: { access_token: string; refresh_token: string
   apiClient.defaults.headers.common['Authorization'] = `Bearer ${tokens.access_token}`;
 }
 
+function clearAuthTokens() {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  delete apiClient.defaults.headers.common['Authorization'];
+}
+
 export async function refreshAuthTokens(): Promise<string | null> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+
   const refreshToken = localStorage.getItem('refresh_token');
   if (!refreshToken) {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+    clearAuthTokens();
     triggerForceLogout();
     return null;
   }
 
-  try {
-    const res = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-      refresh_token: refreshToken,
-    });
+  refreshPromise = (async () => {
+    try {
+      const res = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+        refresh_token: refreshToken,
+      });
 
-    if (res.data.code === 0) {
-      persistAuthTokens(res.data.data);
-      return res.data.data.access_token;
+      if (res.data.code === 0) {
+        persistAuthTokens(res.data.data);
+        return res.data.data.access_token;
+      }
+    } catch (refreshError) {
+      clearAuthTokens();
+      triggerForceLogout();
+      throw refreshError;
+    } finally {
+      refreshPromise = null;
     }
-  } catch (refreshError) {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    triggerForceLogout();
-    throw refreshError;
-  }
 
-  localStorage.removeItem('access_token');
-  localStorage.removeItem('refresh_token');
-  triggerForceLogout();
-  return null;
+    clearAuthTokens();
+    triggerForceLogout();
+    return null;
+  })();
+
+  return refreshPromise;
 }
 
 // Create axios instance with base URL
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
   },

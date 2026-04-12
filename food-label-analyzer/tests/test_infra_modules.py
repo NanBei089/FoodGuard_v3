@@ -21,6 +21,7 @@ REQUIRED_ENV_VARS = {
     "DATABASE_SYNC_URL": "postgresql+psycopg://postgres:password@localhost:5432/food_analyzer",
     "MINIO_ACCESS_KEY": "minioadmin",
     "MINIO_SECRET_KEY": "minio-secret",
+    "PADDLEOCR_MODE": "remote",
     "PADDLEOCR_JOB_URL": "https://paddle-ocr.example.com/api/v1/ocr/job",
     "PADDLEOCR_TOKEN": "paddle-token",
     "DEEPSEEK_API_KEY": "deepseek-api-key",
@@ -172,6 +173,7 @@ def test_celery_app_registers_analysis_task(monkeypatch: pytest.MonkeyPatch) -> 
     celery_module = importlib.reload(celery_module)
 
     assert "analysis.process_image" in celery_module.celery_app.tasks
+    assert celery_module.celery_app.conf.worker_max_tasks_per_child == 200
     if os.name == "nt":
         assert celery_module.celery_app.conf.worker_pool == "solo"
         assert celery_module.celery_app.conf.worker_concurrency == 1
@@ -368,3 +370,29 @@ def test_probe_ocr_runtime_rejects_server_errors(
 
     with pytest.raises(RuntimeError):
         asyncio.run(main_module._probe_ocr_runtime())
+
+
+def test_probe_ocr_runtime_uses_local_runtime_probe_when_local_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_required_env(
+        monkeypatch,
+        SKIP_STARTUP_CHECKS="true",
+        PADDLEOCR_MODE="local",
+    )
+    main_module = importlib.import_module("app.main")
+    main_module = importlib.reload(main_module)
+    calls: list[str] = []
+
+    def fake_ensure_local_runtime_available(preference: str) -> str:
+        calls.append(preference)
+        return "gpu"
+
+    monkeypatch.setattr(
+        "app.workers.ocr.local_engine.ensure_local_runtime_available",
+        fake_ensure_local_runtime_available,
+    )
+
+    asyncio.run(main_module._probe_ocr_runtime())
+
+    assert calls == ["auto"]

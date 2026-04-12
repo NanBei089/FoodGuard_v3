@@ -10,6 +10,7 @@ import structlog
 from app.core.config import get_settings
 from app.core.errors import OCRServiceError
 from app.workers.ocr import client as ocr_client
+from app.workers.ocr import local_engine as ocr_local
 from app.workers.ocr.cache import _ENGINE_CACHE, get_cached_engine
 from app.workers.ocr.parsing import (
     _convert_table_to_nutrition_json,
@@ -31,6 +32,10 @@ requests = ocr_client.requests
 time = ocr_client.time
 PaddleOCRAPIClient = ocr_client.PaddleOCRAPIClient
 PaddleOCR = PaddleOCRAPIClient
+
+
+def _is_local_ocr_mode() -> bool:
+    return get_settings().PADDLEOCR_MODE == "local"
 
 
 def _build_ocr_config(model: str) -> OCRConfig:
@@ -68,14 +73,58 @@ def _build_ocr_config(model: str) -> OCRConfig:
     )
 
 
-def _get_ocr_engine() -> PaddleOCR:
+def _get_ocr_engine() -> Any:
+    if _is_local_ocr_mode():
+        settings = get_settings()
+        device = ocr_local.resolve_device(settings.PADDLEOCR_DEVICE)
+        cache_key = (
+            f"local:text:{device}:{settings.PADDLEOCR_LOCAL_PRECISION}:"
+            f"{settings.PADDLEOCR_LOCAL_MODEL_DIR or ''}"
+        )
+        return get_cached_engine(
+            cache_key,
+            lambda: ocr_local.LocalPaddleOCRClient(
+                device=device,
+                precision=settings.PADDLEOCR_LOCAL_PRECISION,
+                cpu_threads=settings.PADDLEOCR_LOCAL_CPU_THREADS,
+                enable_mkldnn=settings.PADDLEOCR_LOCAL_ENABLE_MKLDNN,
+                use_doc_orientation_classify=settings.PADDLEOCR_USE_DOC_ORIENTATION_CLASSIFY,
+                use_doc_unwarping=settings.PADDLEOCR_USE_DOC_UNWARPING,
+                use_textline_orientation=settings.PADDLEOCR_USE_TEXTLINE_ORIENTATION,
+                text_det_limit_side_len=settings.PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN,
+                text_det_limit_type=settings.PADDLEOCR_TEXT_DET_LIMIT_TYPE,
+                text_det_thresh=settings.PADDLEOCR_TEXT_DET_THESH,
+                text_det_box_thresh=settings.PADDLEOCR_DET_DB_BOX_THRESH,
+                text_det_unclip_ratio=settings.PADDLEOCR_DET_DB_UNCLIP_RATIO,
+                local_model_dir=settings.PADDLEOCR_LOCAL_MODEL_DIR,
+            ),
+        )
+
     settings = get_settings()
     config = _build_ocr_config(settings.PADDLEOCR_MODEL)
     cache_key = json.dumps(asdict(config), ensure_ascii=False, sort_keys=True)
     return get_cached_engine(cache_key, lambda: PaddleOCR(config))
 
 
-def _get_nutrition_ocr_engine() -> PaddleOCR:
+def _get_nutrition_ocr_engine() -> Any:
+    if _is_local_ocr_mode():
+        settings = get_settings()
+        device = ocr_local.resolve_device(settings.PADDLEOCR_DEVICE)
+        cache_key = (
+            f"local:table:{device}:{settings.PADDLEOCR_LOCAL_PRECISION}:"
+            f"{settings.PADDLEOCR_LOCAL_MODEL_DIR or ''}"
+        )
+        return get_cached_engine(
+            cache_key,
+            lambda: ocr_local.LocalPPStructureClient(
+                device=device,
+                precision=settings.PADDLEOCR_LOCAL_PRECISION,
+                cpu_threads=settings.PADDLEOCR_LOCAL_CPU_THREADS,
+                enable_mkldnn=settings.PADDLEOCR_LOCAL_ENABLE_MKLDNN,
+                local_model_dir=settings.PADDLEOCR_LOCAL_MODEL_DIR,
+            ),
+        )
+
     settings = get_settings()
     config = _build_ocr_config(settings.PADDLEOCR_NUTRITION_MODEL)
     cache_key = json.dumps(asdict(config), ensure_ascii=False, sort_keys=True)
@@ -90,7 +139,9 @@ def warmup() -> None:
 def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
     engine = _get_ocr_engine()
     try:
-        prepared_bytes = _prepare_image_for_remote_ocr(image_bytes)
+        prepared_bytes = (
+            image_bytes if _is_local_ocr_mode() else _prepare_image_for_remote_ocr(image_bytes)
+        )
         raw_result = engine.ocr(prepared_bytes)
         lines = _extract_text_lines_with_nested_fallback(raw_result)
         raw_text = "\n".join(line["text"] for line in lines if line["text"])
@@ -110,7 +161,9 @@ def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
 def recognize_nutrition_table(image_bytes: bytes) -> TableRecognitionResult:
     engine = _get_nutrition_ocr_engine()
     try:
-        prepared_bytes = _prepare_image_for_remote_ocr(image_bytes)
+        prepared_bytes = (
+            image_bytes if _is_local_ocr_mode() else _prepare_image_for_remote_ocr(image_bytes)
+        )
         raw_result = engine.ocr(prepared_bytes)
         lines = _extract_text_lines_with_nested_fallback(raw_result)
         raw_text = "\n".join(line["text"] for line in lines if line["text"])
@@ -192,20 +245,34 @@ def recognize_parallel(
     full_text_image_bytes: bytes,
     nutrition_image_bytes: bytes | None = None,
 ) -> OCRParallelResult:
-    full_text_config = _get_ocr_engine().config
-    nutrition_config = _get_nutrition_ocr_engine().config
     if nutrition_image_bytes is None:
         nutrition_image_bytes = full_text_image_bytes
-    prepared_full_text_image_bytes = _prepare_image_for_remote_ocr(full_text_image_bytes)
-    prepared_nutrition_image_bytes = _prepare_image_for_remote_ocr(nutrition_image_bytes)
 
     try:
-        job1_result, job2_result = _run_parallel_jobs(
-            prepared_full_text_image_bytes,
-            prepared_nutrition_image_bytes,
-            full_text_config,
-            nutrition_config,
-        )
+        if _is_local_ocr_mode():
+            full_engine = _get_ocr_engine()
+            nutrition_engine = _get_nutrition_ocr_engine()
+            if getattr(full_engine, "device", None) == "gpu":
+                logger.debug("local_gpu_parallel_may_serialize")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future1 = executor.submit(full_engine.ocr, full_text_image_bytes)
+                future2 = executor.submit(nutrition_engine.ocr, nutrition_image_bytes)
+                job1_result, job2_result = future1.result(), future2.result()
+        else:
+            full_text_config = _get_ocr_engine().config
+            nutrition_config = _get_nutrition_ocr_engine().config
+            prepared_full_text_image_bytes = _prepare_image_for_remote_ocr(
+                full_text_image_bytes
+            )
+            prepared_nutrition_image_bytes = _prepare_image_for_remote_ocr(
+                nutrition_image_bytes
+            )
+            job1_result, job2_result = _run_parallel_jobs(
+                prepared_full_text_image_bytes,
+                prepared_nutrition_image_bytes,
+                full_text_config,
+                nutrition_config,
+            )
 
         full_text_lines = _extract_text_lines_with_nested_fallback(job1_result)
         full_text_raw = "\n".join(line["text"] for line in full_text_lines if line["text"])

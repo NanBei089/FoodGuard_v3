@@ -38,6 +38,7 @@ REQUIRED_ENV_VARS = {
     "DATABASE_SYNC_URL": "postgresql+psycopg://postgres:password@localhost:5432/food_analyzer",
     "MINIO_ACCESS_KEY": "minioadmin",
     "MINIO_SECRET_KEY": "minio-secret",
+    "PADDLEOCR_MODE": "remote",
     "PADDLEOCR_JOB_URL": "https://paddle-ocr.example.com/api/v1/ocr/job",
     "PADDLEOCR_TOKEN": "paddle-token",
     "DEEPSEEK_API_KEY": "deepseek-api-key",

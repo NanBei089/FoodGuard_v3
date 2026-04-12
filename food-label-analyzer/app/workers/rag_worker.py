@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 import chromadb
+from chromadb.errors import ChromaError
 import httpx
 import structlog
 
@@ -178,7 +179,7 @@ def warmup() -> None:
         return
     try:
         _embed("食品配料")
-    except Exception as exc:
+    except EmbeddingServiceError as exc:
         logger.warning("rag_embedding_warmup_failed", error=str(exc))
 
 
@@ -188,7 +189,7 @@ def retrieve_all_ingredients(query_text: str, top_k: int = 5) -> list[dict[str, 
 
     try:
         collection = _get_ingredients_collection()
-    except Exception as exc:
+    except ChromaError as exc:
         logger.warning("chroma_collection_not_found", error=str(exc))
         return []
 
@@ -199,7 +200,7 @@ def retrieve_all_ingredients(query_text: str, top_k: int = 5) -> list[dict[str, 
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
-    except Exception as exc:
+    except (ChromaError, EmbeddingServiceError) as exc:
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 
@@ -230,7 +231,7 @@ def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]
 
     try:
         collection = _get_standards_collection()
-    except Exception as exc:
+    except ChromaError as exc:
         logger.warning("chroma_collection_not_found", error=str(exc))
         return []
 
@@ -241,7 +242,7 @@ def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
-    except Exception as exc:
+    except (ChromaError, EmbeddingServiceError) as exc:
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 

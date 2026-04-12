@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import structlog
 from minio import Minio
-from minio.error import S3Error
+from minio.error import InvalidResponseError, MinioException, S3Error, ServerError
 
 from app.core.config import get_settings
 from app.core.errors import StorageServiceError
@@ -46,7 +46,7 @@ class StorageService:
             else:
                 logger.info("minio_bucket_exists", bucket=self._bucket_name)
             self._bucket_ready = True
-        except Exception as exc:
+        except (InvalidResponseError, MinioException, OSError, S3Error, ServerError) as exc:
             raise self._raise_storage_error("Failed to ensure bucket", exc)
 
     async def upload_image(
@@ -73,7 +73,7 @@ class StorageService:
             image_url = await self.get_presigned_url(image_key)
             logger.info("image_uploaded", image_key=image_key, size=len(file_bytes))
             return image_key, image_url
-        except Exception as exc:
+        except (InvalidResponseError, MinioException, OSError, S3Error, ServerError) as exc:
             raise self._raise_storage_error("Failed to upload image", exc)
 
     async def upload_artifact(
@@ -90,7 +90,7 @@ class StorageService:
                 content_type=content_type,
             )
             return await self.get_presigned_url(object_key)
-        except Exception as exc:
+        except (InvalidResponseError, MinioException, OSError, S3Error, ServerError) as exc:
             raise self._raise_storage_error("Failed to upload artifact", exc)
 
     async def get_presigned_url(self, image_key: str, expires: int = 3600) -> str:
@@ -102,7 +102,7 @@ class StorageService:
                 image_key,
                 expires=timedelta(seconds=expires),
             )
-        except Exception as exc:
+        except (InvalidResponseError, MinioException, OSError, S3Error, ServerError) as exc:
             raise self._raise_storage_error("Failed to create presigned URL", exc)
 
     async def delete_image(self, image_key: str) -> None:
@@ -111,7 +111,7 @@ class StorageService:
                 self._client.remove_object, self._bucket_name, image_key
             )
             logger.info("image_deleted", image_key=image_key)
-        except Exception as exc:
+        except (InvalidResponseError, MinioException, OSError, S3Error, ServerError) as exc:
             raise self._raise_storage_error("Failed to delete image", exc)
 
     def _build_object_key(self, user_id: str, extension: str) -> str:

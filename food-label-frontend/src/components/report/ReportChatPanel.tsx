@@ -153,14 +153,18 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
           if (!isActiveController()) {
             return;
           }
-          setConversationId(payload.conversation_id);
-          setMessages((current) =>
-            current.map((item) =>
-              item.message_id === tempUserId
-                ? { ...item, message_id: payload.user_message_id }
-                : item,
-            ),
-          );
+          if (payload.conversation_id) {
+            setConversationId(payload.conversation_id);
+          }
+          if (payload.user_message_id) {
+            setMessages((current) =>
+              current.map((item) =>
+                item.message_id === tempUserId
+                  ? { ...item, message_id: payload.user_message_id }
+                  : item,
+              ),
+            );
+          }
         },
         onDelta: (chunk) => {
           if (!chunk || !isActiveController()) {

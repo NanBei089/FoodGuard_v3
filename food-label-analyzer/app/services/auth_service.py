@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import structlog
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,12 @@ RESET_TOKEN_EXPIRE_SECONDS = 900
 EMAIL_COOLDOWN_SECONDS = 60
 _DUMMY_PASSWORD_HASH = pwd_context.hash("CodexDummyPassword123")
 logger = structlog.get_logger(__name__)
+
+# NOTE:
+# - Register flow must fail loudly when verification email delivery fails, so the user
+#   can retry instead of assuming a code was sent.
+# - Password-reset flow must suppress email delivery failures to avoid exposing whether
+#   an account exists through response differences.
 
 
 def _normalize_email(email: str) -> str:
@@ -114,7 +121,15 @@ async def send_register_code(email: str, db: AsyncSession, redis: Redis) -> int:
     db.add(verification)
     await db.flush()
     await send_verification_email(normalized_email, verification.code)
-    await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
+    try:
+        await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
+    except RedisError as exc:
+        logger.warning(
+            "register_cooldown_set_failed",
+            email=normalized_email,
+            exception_type=exc.__class__.__name__,
+            exception_message=str(exc),
+        )
     return EMAIL_COOLDOWN_SECONDS
 
 

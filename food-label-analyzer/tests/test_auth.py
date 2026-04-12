@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.exc import IntegrityError
 
 from app.core.error_handlers import register_exception_handlers
@@ -129,6 +130,35 @@ def test_send_register_code_propagates_email_delivery_failure(
         )
 
     fake_redis.set.assert_not_awaited()
+
+
+def test_send_register_code_tolerates_cooldown_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
+    fake_redis = AsyncMock()
+    fake_redis.exists.return_value = False
+    fake_redis.set.side_effect = RedisConnectionError("redis down")
+    fake_send_email = AsyncMock()
+    monkeypatch.setattr(service_module, "send_verification_email", fake_send_email)
+
+    cooldown = asyncio.run(
+        service_module.send_register_code("User@Example.com", fake_db, fake_redis)
+    )
+
+    assert cooldown == 60
+    fake_send_email.assert_awaited_once()
+    fake_redis.set.assert_awaited_once_with(
+        "cooldown:register:user@example.com", "1", ex=60
+    )
 
 
 def test_send_register_code_enforces_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import random
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import (
     CooldownError,
+    EmailDeliveryError,
     EmailAlreadyExistsError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
@@ -43,6 +44,7 @@ EMAIL_VERIFY_CODE_EXPIRE_SECONDS = 300
 RESET_TOKEN_EXPIRE_SECONDS = 900
 EMAIL_COOLDOWN_SECONDS = 60
 _DUMMY_PASSWORD_HASH = pwd_context.hash("CodexDummyPassword123")
+logger = structlog.get_logger(__name__)
 
 
 def _normalize_email(email: str) -> str:
@@ -111,8 +113,8 @@ async def send_register_code(email: str, db: AsyncSession, redis: Redis) -> int:
     )
     db.add(verification)
     await db.flush()
+    await send_verification_email(normalized_email, verification.code)
     await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
-    asyncio.create_task(send_verification_email(normalized_email, verification.code))
     return EMAIL_COOLDOWN_SECONDS
 
 
@@ -246,7 +248,15 @@ async def send_reset_email(email: str, db: AsyncSession, redis: Redis) -> None:
         )
         db.add(reset_token)
         await db.flush()
-        asyncio.create_task(dispatch_reset_email(normalized_email, reset_token.token))
+        try:
+            await dispatch_reset_email(normalized_email, reset_token.token)
+        except EmailDeliveryError as exc:
+            logger.warning(
+                "password_reset_email_delivery_failed",
+                email=normalized_email,
+                exception_type=exc.__class__.__name__,
+                exception_message=str(exc),
+            )
 
     await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
 

@@ -33,9 +33,17 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const activeStreamRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
   const canSend = input.trim().length > 0 && !sending;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      activeStreamRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +91,10 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
 
     return () => {
       cancelled = true;
-      activeStreamRef.current?.abort();
+      if (activeStreamRef.current) {
+        activeStreamRef.current.abort();
+        activeStreamRef.current = null;
+      }
     };
   }, [reportId]);
 
@@ -125,8 +136,13 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
     ]);
     setSending(true);
 
+    activeStreamRef.current?.abort();
     const controller = new AbortController();
     activeStreamRef.current = controller;
+    const isActiveController = () =>
+      mountedRef.current &&
+      activeStreamRef.current === controller &&
+      !controller.signal.aborted;
 
     try {
       await streamReportChat({
@@ -134,7 +150,10 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
         message: nextMessage,
         signal: controller.signal,
         onMeta: (payload) => {
-          setConversationId(payload.conversation_id || conversationId);
+          if (!isActiveController()) {
+            return;
+          }
+          setConversationId(payload.conversation_id);
           setMessages((current) =>
             current.map((item) =>
               item.message_id === tempUserId
@@ -144,7 +163,7 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
           );
         },
         onDelta: (chunk) => {
-          if (!chunk) {
+          if (!chunk || !isActiveController()) {
             return;
           }
           setMessages((current) =>
@@ -156,6 +175,9 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
           );
         },
         onDone: (payload) => {
+          if (!isActiveController()) {
+            return;
+          }
           setMessages((current) =>
             current.map((item) =>
               item.message_id === tempAssistantId
@@ -171,13 +193,18 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
         },
       });
     } catch (err: unknown) {
-      if ((err as { name?: string }).name !== 'AbortError') {
+      if (isActiveController() && (err as { name?: string }).name !== 'AbortError') {
         setMessages((current) => current.filter((item) => item.message_id !== tempAssistantId));
         setError(getErrorMessage(err, '问答生成失败，请稍后重试'));
       }
     } finally {
-      activeStreamRef.current = null;
-      setSending(false);
+      const isLatestController = activeStreamRef.current === controller;
+      if (isLatestController) {
+        activeStreamRef.current = null;
+      }
+      if (mountedRef.current && (isLatestController || activeStreamRef.current === null)) {
+        setSending(false);
+      }
     }
   };
 

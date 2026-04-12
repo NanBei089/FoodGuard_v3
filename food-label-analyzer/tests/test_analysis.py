@@ -346,6 +346,99 @@ def test_process_image_task_retries_retryable_errors(
     assert statuses == [(TaskStatus.PROCESSING, None)]
 
 
+def test_process_image_task_marks_failed_for_invalid_payload_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    statuses: list[tuple[TaskStatus, str | None]] = []
+
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_update_task_status",
+        lambda task_id, status, error_message=None: statuses.append(
+            (status, error_message)
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_download_image", lambda image_key: b"img"
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker, "detect", lambda image_bytes: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_full_text",
+        lambda image_bytes: OCRTextResult(
+            raw_text="salt, sugar",
+            lines=[{"text": "salt, sugar"}],
+            blocks=[],
+            artifact_json_url="https://example.com/ocr.json",
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.nutrition_extractor,
+        "parse",
+        lambda *args, **kwargs: ["bad-payload"],
+    )
+
+    analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
+    try:
+        result = analysis_task_module.process_image_task.run(
+            "task-id", "image-key", str(uuid.uuid4())
+        )
+    finally:
+        analysis_task_module.process_image_task.pop_request()
+
+    assert result["status"] == "failed"
+    assert statuses[-1] == (
+        TaskStatus.FAILED,
+        "Internal analysis pipeline error",
+    )
+
+
+def test_process_image_task_hides_unexpected_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    statuses: list[tuple[TaskStatus, str | None]] = []
+
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_update_task_status",
+        lambda task_id, status, error_message=None: statuses.append(
+            (status, error_message)
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_download_image", lambda image_key: b"img"
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker,
+        "detect",
+        lambda image_bytes: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
+    try:
+        result = analysis_task_module.process_image_task.run(
+            "task-id", "image-key", str(uuid.uuid4())
+        )
+    finally:
+        analysis_task_module.process_image_task.pop_request()
+
+    assert result["status"] == "failed"
+    assert statuses[-1] == (
+        TaskStatus.FAILED,
+        "Internal analysis pipeline error",
+    )
+
+
 def test_process_image_task_completes_with_report_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

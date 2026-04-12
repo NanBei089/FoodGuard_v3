@@ -162,12 +162,24 @@ class EmbeddingServiceError(ExternalServiceException):
     message = "知识检索服务暂时不可用"
 
 
+class EmailDeliveryError(ExternalServiceException):
+    message = "邮件服务暂时不可用"
+
+
+class AnalysisPayloadError(AppBaseException):
+    status_code = 500
+    error_code = 5002
+    message = "分析结果格式无效"
+
+
 __all__ = [
+    "AnalysisPayloadError",
     "AppBaseException",
     "AuthException",
     "CooldownError",
     "EmbeddingServiceError",
     "EmailAlreadyExistsError",
+    "EmailDeliveryError",
     "EmailNotVerifiedError",
     "ExternalServiceException",
     "FileTooLargeError",

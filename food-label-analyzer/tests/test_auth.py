@@ -16,6 +16,7 @@ from app.core.error_handlers import register_exception_handlers
 from app.core.errors import (
     CooldownError,
     EmailAlreadyExistsError,
+    EmailDeliveryError,
     EmailNotVerifiedError,
     InvalidCredentialsError,
     PasswordResetTokenInvalidError,
@@ -83,14 +84,8 @@ def test_send_register_code_persists_verification_and_sets_cooldown(
     fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
     fake_redis = AsyncMock()
     fake_redis.exists.return_value = False
-
-    scheduled: list[object] = []
-
-    def fake_create_task(coro):
-        scheduled.append(coro)
-        return SimpleNamespace()
-
-    monkeypatch.setattr(service_module.asyncio, "create_task", fake_create_task)
+    fake_send_email = AsyncMock()
+    monkeypatch.setattr(service_module, "send_verification_email", fake_send_email)
 
     cooldown = asyncio.run(
         service_module.send_register_code("User@Example.com", fake_db, fake_redis)
@@ -102,11 +97,38 @@ def test_send_register_code_persists_verification_and_sets_cooldown(
     assert isinstance(verification, EmailVerification)
     assert verification.email == "user@example.com"
     assert verification.type == VerificationType.REGISTER
+    fake_send_email.assert_awaited_once_with("user@example.com", verification.code)
     fake_redis.set.assert_awaited_once_with(
         "cooldown:register:user@example.com", "1", ex=60
     )
-    assert len(scheduled) == 1
-    scheduled[0].close()
+
+
+def test_send_register_code_propagates_email_delivery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
+    fake_redis = AsyncMock()
+    fake_redis.exists.return_value = False
+    monkeypatch.setattr(
+        service_module,
+        "send_verification_email",
+        AsyncMock(side_effect=EmailDeliveryError()),
+    )
+
+    with pytest.raises(EmailDeliveryError):
+        asyncio.run(
+            service_module.send_register_code("User@Example.com", fake_db, fake_redis)
+        )
+
+    fake_redis.set.assert_not_awaited()
 
 
 def test_send_register_code_enforces_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,6 +309,44 @@ def test_send_reset_email_does_not_enumerate_unknown_users(
     )
 
 
+def test_send_reset_email_swallows_delivery_failures_for_existing_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+
+    user = User(
+        email="user@example.com",
+        password_hash="hashed",
+        is_verified=True,
+        is_active=True,
+    )
+    user.id = uuid.uuid4()
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(return_value=_ScalarResult(user))
+    fake_redis = AsyncMock()
+    fake_redis.exists.return_value = False
+    monkeypatch.setattr(
+        service_module,
+        "dispatch_reset_email",
+        AsyncMock(side_effect=EmailDeliveryError()),
+    )
+
+    asyncio.run(
+        service_module.send_reset_email("user@example.com", fake_db, fake_redis)
+    )
+
+    fake_db.add.assert_called_once()
+    fake_redis.set.assert_awaited_once_with(
+        "cooldown:reset:user@example.com", "1", ex=60
+    )
+
+
 def test_reset_password_marks_token_used(monkeypatch: pytest.MonkeyPatch) -> None:
     load_required_env(monkeypatch)
     service_module = importlib.reload(
@@ -364,7 +424,7 @@ def test_reset_password_raises_dedicated_invalid_token_error(
         )
 
 
-def test_email_service_wrapper_logs_and_swallows_failures(
+def test_email_service_wrapper_propagates_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     load_required_env(monkeypatch)
@@ -383,12 +443,15 @@ def test_email_service_wrapper_logs_and_swallows_failures(
         email_service_module, "get_email_service", lambda: FailingEmailService()
     )
 
-    asyncio.run(
-        email_service_module.send_verification_email("user@example.com", "123456")
-    )
-    asyncio.run(
-        email_service_module.send_reset_email("user@example.com", "reset-token")
-    )
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            email_service_module.send_verification_email("user@example.com", "123456")
+        )
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(
+            email_service_module.send_reset_email("user@example.com", "reset-token")
+        )
 
 
 def test_auth_router_login_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -420,6 +483,36 @@ def test_auth_router_login_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = response.json()
     assert payload["code"] == 0
     assert payload["data"]["access_token"] == "access"
+
+
+def test_auth_router_register_send_code_returns_503_when_email_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, api_module = _build_auth_app(monkeypatch)
+    fake_db = AsyncMock()
+    fake_redis = AsyncMock()
+
+    async def override_db():
+        yield fake_db
+
+    async def override_redis():
+        return fake_redis
+
+    async def fake_send_register_code(email: str, db, redis) -> int:
+        raise EmailDeliveryError()
+
+    app.dependency_overrides[api_module.get_db] = override_db
+    app.dependency_overrides[api_module.get_redis] = override_redis
+    monkeypatch.setattr(api_module, "send_register_code", fake_send_register_code)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/register/send-code",
+            json={"email": "user@example.com"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["message"] == "邮件服务暂时不可用"
 
 
 def test_auth_router_login_returns_403_for_unverified_email(

@@ -6,11 +6,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import structlog
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ReportNotFoundError
+from app.core.errors import ReportNotFoundError, StorageServiceError
 from app.models.analysis_task import AnalysisTask
 from app.models.report import Report
 from app.models.report_conversation import ReportConversation
@@ -33,6 +34,9 @@ from app.schemas.report import (
 )
 from app.services.storage_service import get_storage_service
 from app.workers.extractor.ingredient_extractor import normalize_ingredients_text
+
+logger = structlog.get_logger(__name__)
+_PRESIGNED_URL_TIMEOUT_SECONDS = 3.0
 
 NUTRIENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "energy": {
@@ -212,8 +216,18 @@ async def _resolve_artifact_urls(value: Any) -> dict[str, str] | None:
         if not key.endswith("_key"):
             continue
         try:
-            resolved[f"{key[:-4]}_url"] = await storage.get_presigned_url(object_key)
-        except Exception:
+            resolved[f"{key[:-4]}_url"] = await asyncio.wait_for(
+                storage.get_presigned_url(object_key),
+                timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+            )
+        except (StorageServiceError, asyncio.TimeoutError) as exc:
+            logger.warning(
+                "report_artifact_presign_fallback",
+                artifact_key=key,
+                object_key=object_key,
+                exception_type=exc.__class__.__name__,
+                exception_message=str(exc),
+            )
             continue
     return resolved
 
@@ -513,8 +527,18 @@ async def _build_image_url(image_key: str | None, image_url: str | None) -> str:
     if not image_key:
         return image_url or ""
     try:
-        return await get_storage_service().get_presigned_url(image_key)
-    except Exception:
+        return await asyncio.wait_for(
+            get_storage_service().get_presigned_url(image_key),
+            timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+        )
+    except (StorageServiceError, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "report_image_presign_fallback",
+            image_key=image_key,
+            fallback_url=bool(image_url),
+            exception_type=exc.__class__.__name__,
+            exception_message=str(exc),
+        )
         return image_url or ""
 
 

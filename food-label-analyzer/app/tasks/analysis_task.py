@@ -7,6 +7,7 @@ import structlog
 from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.errors import (
+    AnalysisPayloadError,
     EmbeddingServiceError,
     LLMServiceError,
     OCRServiceError,
@@ -35,6 +36,7 @@ from app.workers.extractor import ingredient_extractor, nutrition_extractor
 from app.workers.ocr_worker import TableRecognitionResult
 
 logger = structlog.get_logger(__name__)
+_INTERNAL_ANALYSIS_ERROR_MESSAGE = "Internal analysis pipeline error"
 
 
 def _to_plain_data(value: Any) -> Any:
@@ -49,6 +51,14 @@ def _to_plain_data(value: Any) -> Any:
             key: item for key, item in vars(value).items() if not key.startswith("_")
         }
     return value
+
+
+def _require_dict_payload(payload_name: str, value: Any) -> dict[str, Any]:
+    plain_value = _to_plain_data(value)
+    if not isinstance(plain_value, dict):
+        raise AnalysisPayloadError(f"{payload_name} payload must be a dict")
+    return plain_value
+
 
 def _extract_score(llm_output_json: dict[str, Any]) -> int:
     raw_score = llm_output_json.get("score", 0)
@@ -160,9 +170,7 @@ def process_image_task(
                 else full_text or None
             ),
         )
-        nutrition_json = _to_plain_data(nutrition_output) or {}
-        if not isinstance(nutrition_json, dict):
-            nutrition_json = {}
+        nutrition_json = _require_dict_payload("nutrition", nutrition_output)
         timings["nutrition_ms"] = int((perf_counter() - step_started) * 1000)
 
         step_started = perf_counter()
@@ -171,9 +179,7 @@ def process_image_task(
 
         step_started = perf_counter()
         rag_output = _run_rag(ingredient_terms, ingredients_text)
-        rag_results_json = _to_plain_data(rag_output) or {}
-        if not isinstance(rag_results_json, dict):
-            rag_results_json = {}
+        rag_results_json = _require_dict_payload("rag", rag_output)
         timings["rag_ms"] = int((perf_counter() - step_started) * 1000)
 
         step_started = perf_counter()
@@ -184,9 +190,7 @@ def process_image_task(
             ingredient_terms,
             ingredients_text,
         )
-        llm_output_json = _to_plain_data(llm_output) or {}
-        if not isinstance(llm_output_json, dict):
-            llm_output_json = {}
+        llm_output_json = _require_dict_payload("llm", llm_output)
         llm_output_json = _ensure_ingredient_coverage(
             llm_output_json,
             ingredient_terms,
@@ -264,9 +268,9 @@ def process_image_task(
         )
         return {"task_id": task_id, "status": TaskStatus.FAILED.value}
     except Exception as exc:
-        _update_task_status(task_id, TaskStatus.FAILED, str(exc))
+        _update_task_status(task_id, TaskStatus.FAILED, _INTERNAL_ANALYSIS_ERROR_MESSAGE)
         logger.exception(
-            "analysis_task_failed",
+            "analysis_task_unexpected_failure",
             task_id=task_id,
             exception_type=exc.__class__.__name__,
             exception_message=str(exc),

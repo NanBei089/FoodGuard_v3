@@ -5,14 +5,14 @@ import importlib
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.error_handlers import register_exception_handlers
-from app.core.errors import ReportNotFoundError
+from app.core.errors import ReportNotFoundError, StorageServiceError
 from app.models.analysis_task import AnalysisTask, TaskStatus
 from app.models.report import Report
 from app.models.user import User
@@ -340,6 +340,71 @@ def test_report_service_resolves_artifact_keys_to_signed_urls(
         detail.artifact_urls["ocr_full_result_url"]
         == "https://example.com/artifact.json"
     )
+
+
+def test_report_service_falls_back_to_existing_urls_when_presign_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    report_service_module = importlib.reload(
+        importlib.import_module("app.services.report_service")
+    )
+
+    user_id = uuid.uuid4()
+    report_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    report = Report(
+        task_id=task_id,
+        user_id=user_id,
+        ingredients_text="salt",
+        nutrition_json=None,
+        nutrition_parse_source="ocr_text",
+        rag_results_json=None,
+        llm_output_json={
+            "summary": "S" * 60,
+            "ingredients": [],
+            "health_advice": _health_advice_payload(),
+            "score": 80,
+        },
+        score=80,
+        artifact_urls={"ocr_full_result_key": "reports/u/t/ocr/full_text_result.json"},
+    )
+    report.id = report_id
+    report.created_at = created_at
+
+    async def failing_presign(_: str) -> str:
+        raise StorageServiceError("storage down")
+
+    fake_storage = SimpleNamespace(get_presigned_url=AsyncMock(side_effect=failing_presign))
+    monkeypatch.setattr(
+        report_service_module, "get_storage_service", lambda: fake_storage
+    )
+    monkeypatch.setattr(
+        report_service_module,
+        "logger",
+        SimpleNamespace(warning=Mock()),
+    )
+
+    fake_db = AsyncMock()
+    fake_db.execute = AsyncMock(
+        return_value=_OneOrNoneResult(
+            (report, "uploads/u/report.png", "https://example.com/original.png")
+        )
+    )
+
+    detail = asyncio.run(
+        report_service_module.get_report_detail(report.id, user_id, fake_db)
+    )
+
+    assert detail.image_url == "https://example.com/original.png"
+    assert detail.artifact_urls is not None
+    assert (
+        detail.artifact_urls["ocr_full_result_key"]
+        == "reports/u/t/ocr/full_text_result.json"
+    )
+    assert "ocr_full_result_url" not in detail.artifact_urls
+    assert report_service_module.logger.warning.call_count == 2
 
 
 def test_report_service_raises_for_missing_report(

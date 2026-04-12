@@ -5,6 +5,7 @@ import type { ApiResponse } from '@/types/api';
 let onForceLogout: (() => void) | null = null;
 let refreshPromise: Promise<string | null> | null = null;
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const REFRESH_TIMEOUT_MS = 12000;
 
 export function setForceLogoutHandler(handler: (() => void) | null) {
   onForceLogout = handler;
@@ -46,9 +47,15 @@ export async function refreshAuthTokens(): Promise<string | null> {
 
   refreshPromise = (async () => {
     try {
-      const res = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-        refresh_token: refreshToken,
-      });
+      const res = await axios.post(
+        `${API_BASE_URL}/auth/refresh`,
+        {
+          refresh_token: refreshToken,
+        },
+        {
+          timeout: REFRESH_TIMEOUT_MS,
+        },
+      );
 
       if (res.data.code === 0) {
         persistAuthTokens(res.data.data);

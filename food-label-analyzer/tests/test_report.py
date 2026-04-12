@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -15,6 +16,8 @@ from app.core.error_handlers import register_exception_handlers
 from app.core.errors import ReportNotFoundError, StorageServiceError
 from app.models.analysis_task import AnalysisTask, TaskStatus
 from app.models.report import Report
+from app.models.report_conversation import ReportConversation
+from app.models.report_conversation_message import ReportConversationMessage
 from app.models.user import User
 from app.schemas.analysis_data import SUPPORTED_HEALTH_ADVICE_GROUPS
 from tests.conftest import load_required_env
@@ -162,6 +165,22 @@ def test_report_service_builds_list_and_detail(monkeypatch: pytest.MonkeyPatch) 
     )
     report.id = report_id
     report.created_at = created_at
+    conversation = ReportConversation(
+        report_id=report_id,
+        user_id=user_id,
+        suggested_questions=["杩欎唤鎶ュ憡閲屾渶闇€瑕佹敞鎰忕殑椋庨櫓鏄粈涔堬紵"],
+    )
+    conversation.id = uuid.uuid4()
+    conversation.messages = [
+        ReportConversationMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="杩欎唤鎶ュ憡鎻愮ず閽犲惈閲忓亸楂樸€?",
+        )
+    ]
+    conversation.messages[0].id = uuid.uuid4()
+    conversation.messages[0].created_at = created_at
+    report.conversation = conversation
 
     fake_storage = SimpleNamespace(
         get_presigned_url=AsyncMock(return_value="https://example.com/signed.png")
@@ -171,6 +190,8 @@ def test_report_service_builds_list_and_detail(monkeypatch: pytest.MonkeyPatch) 
     )
 
     fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
     fake_db.execute = AsyncMock(
         side_effect=[
             _ScalarResult(1),
@@ -211,6 +232,12 @@ def test_report_service_builds_list_and_detail(monkeypatch: pytest.MonkeyPatch) 
     assert detail.rag_summary.high_match_count == 1
     assert detail.rag_summary.empty_count == 1
     assert detail.artifact_urls == {"ocr_full_json_url": "https://example.com/ocr.json"}
+    assert detail.conversation is not None
+    assert (
+        detail.conversation.suggested_questions[0]
+        == "杩欎唤鎶ュ憡閲屾渶闇€瑕佹敞鎰忕殑椋庨櫓鏄粈涔堬紵"
+    )
+    assert detail.conversation.messages[0].content == "杩欎唤鎶ュ憡鎻愮ず閽犲惈閲忓亸楂樸€?"
 
 
 def test_report_service_sanitizes_legacy_html_polluted_ingredients_text(
@@ -252,6 +279,8 @@ def test_report_service_sanitizes_legacy_html_polluted_ingredients_text(
     report.created_at = created_at
 
     fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
     fake_db.execute = AsyncMock(
         return_value=_OneOrNoneResult((report, None, "https://example.com/original.png"))
     )
@@ -261,6 +290,7 @@ def test_report_service_sanitizes_legacy_html_polluted_ingredients_text(
     )
 
     assert detail.ingredients_text == "\u897f\u6885100%"
+    assert detail.conversation is not None
 
 
 def test_report_service_returns_empty_page_when_total_is_zero(
@@ -323,6 +353,8 @@ def test_report_service_resolves_artifact_keys_to_signed_urls(
     )
 
     fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
     fake_db.execute = AsyncMock(
         return_value=_OneOrNoneResult((report, None, "https://example.com/original.png"))
     )
@@ -340,10 +372,12 @@ def test_report_service_resolves_artifact_keys_to_signed_urls(
         detail.artifact_urls["ocr_full_result_url"]
         == "https://example.com/artifact.json"
     )
+    assert detail.conversation is not None
 
 
 def test_report_service_falls_back_to_existing_urls_when_presign_fails(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     load_required_env(monkeypatch)
     report_service_module = importlib.reload(
@@ -380,13 +414,21 @@ def test_report_service_falls_back_to_existing_urls_when_presign_fails(
     monkeypatch.setattr(
         report_service_module, "get_storage_service", lambda: fake_storage
     )
+    caplog.set_level(logging.WARNING, logger="app.services.report_service.test")
+    fallback_logger = logging.getLogger("app.services.report_service.test")
     monkeypatch.setattr(
         report_service_module,
         "logger",
-        SimpleNamespace(warning=Mock()),
+        SimpleNamespace(
+            warning=lambda event, **kwargs: fallback_logger.warning(
+                "%s %s", event, kwargs
+            )
+        ),
     )
 
     fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
     fake_db.execute = AsyncMock(
         return_value=_OneOrNoneResult(
             (report, "uploads/u/report.png", "https://example.com/original.png")
@@ -404,7 +446,9 @@ def test_report_service_falls_back_to_existing_urls_when_presign_fails(
         == "reports/u/t/ocr/full_text_result.json"
     )
     assert "ocr_full_result_url" not in detail.artifact_urls
-    assert report_service_module.logger.warning.call_count == 2
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("report_image_presign_fallback" in message for message in messages)
+    assert any("report_artifact_presign_fallback" in message for message in messages)
 
 
 def test_report_service_raises_for_missing_report(

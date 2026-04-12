@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { apiGet } from '@/api/client';
 import { HealthAdvice } from '@/components/report/HealthAdvice';
@@ -13,41 +14,34 @@ import type { ReportDetailData, ReportTab } from '@/types/report';
 
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>();
-  const [report, setReport] = useState<ReportDetailData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState<ReportTab>('ingredients');
-
-  useEffect(() => {
-    if (!id) {
-      return;
-    }
-
-    const fetchReport = async () => {
-      try {
-        const res = await apiGet<ReportDetailData>(`/reports/${id}`);
-        if (res.code !== 0) {
-          setError(res.message || '获取报告失败');
-          return;
-        }
-
-        setReport(res.data);
-      } catch (err: unknown) {
-        setError(getErrorMessage(err, '请求失败'));
-      } finally {
-        setLoading(false);
+  const {
+    data: report,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ['report-detail', id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const res = await apiGet<ReportDetailData>(`/reports/${id}`);
+      if (res.code !== 0 || !res.data) {
+        throw new Error(res.message || '获取报告失败');
       }
-    };
+      return res.data;
+    },
+    staleTime: 30_000,
+  });
 
-    fetchReport();
-  }, [id]);
-
-  if (loading) {
+  if (isLoading) {
     return <div className="py-12 text-center">加载中...</div>;
   }
 
   if (error) {
-    return <div className="py-12 text-center text-rose-500">{error}</div>;
+    return (
+      <div className="py-12 text-center text-rose-500">
+        {getErrorMessage(error, '请求失败')}
+      </div>
+    );
   }
 
   if (!report) {
@@ -114,7 +108,10 @@ export default function ReportDetail() {
       </div>
 
       <div className="min-w-0">
-        <ReportChatPanel reportId={report.report_id} />
+        <ReportChatPanel
+          reportId={report.report_id}
+          initialConversation={report.conversation}
+        />
       </div>
     </div>
   );

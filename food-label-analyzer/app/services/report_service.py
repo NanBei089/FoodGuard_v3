@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,11 +11,13 @@ import structlog
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.errors import ReportNotFoundError, StorageServiceError
 from app.models.analysis_task import AnalysisTask
 from app.models.report import Report
 from app.models.report_conversation import ReportConversation
+from app.models.report_conversation_message import ReportConversationMessage
 from app.schemas.analysis_data import (
     HazardItem,
     HealthAdviceItem,
@@ -32,11 +35,18 @@ from app.schemas.report import (
     ReportListItemSchema,
     ReportListResponseSchema,
 )
+from app.schemas.report_chat import (
+    ReportConversationMessageSchema,
+    ReportConversationResponse,
+)
 from app.services.storage_service import get_storage_service
 from app.workers.extractor.ingredient_extractor import normalize_ingredients_text
 
 logger = structlog.get_logger(__name__)
 _PRESIGNED_URL_TIMEOUT_SECONDS = 3.0
+_PRESIGNED_URL_CACHE_TTL_SECONDS = 1800.0
+_PRESIGNED_URL_CACHE_MAXSIZE = 1024
+_PRESIGNED_URL_CACHE: OrderedDict[str, tuple[float, str]] = OrderedDict()
 
 NUTRIENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "energy": {
@@ -205,20 +215,112 @@ def _sanitize_artifact_urls(value: Any) -> dict[str, str] | None:
     return cleaned or None
 
 
+def _evict_expired_presigned_cache_entries(now: float) -> None:
+    expired_keys = [
+        key
+        for key, (expires_at, _) in _PRESIGNED_URL_CACHE.items()
+        if expires_at <= now
+    ]
+    for key in expired_keys:
+        _PRESIGNED_URL_CACHE.pop(key, None)
+
+
+def _get_cached_presigned_url(object_key: str) -> str | None:
+    now = datetime.now(timezone.utc).timestamp()
+    _evict_expired_presigned_cache_entries(now)
+    cached = _PRESIGNED_URL_CACHE.get(object_key)
+    if cached is None:
+        return None
+    expires_at, url = cached
+    if expires_at <= now:
+        _PRESIGNED_URL_CACHE.pop(object_key, None)
+        return None
+    _PRESIGNED_URL_CACHE.move_to_end(object_key)
+    return url
+
+
+def _store_cached_presigned_url(object_key: str, url: str) -> None:
+    now = datetime.now(timezone.utc).timestamp()
+    _evict_expired_presigned_cache_entries(now)
+    _PRESIGNED_URL_CACHE[object_key] = (
+        now + _PRESIGNED_URL_CACHE_TTL_SECONDS,
+        url,
+    )
+    _PRESIGNED_URL_CACHE.move_to_end(object_key)
+    while len(_PRESIGNED_URL_CACHE) > _PRESIGNED_URL_CACHE_MAXSIZE:
+        _PRESIGNED_URL_CACHE.popitem(last=False)
+
+
+async def _get_presigned_url_with_cache(object_key: str) -> str:
+    cached = _get_cached_presigned_url(object_key)
+    if cached is not None:
+        return cached
+    signed_url = await asyncio.wait_for(
+        get_storage_service().get_presigned_url(object_key),
+        timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+    )
+    _store_cached_presigned_url(object_key, signed_url)
+    return signed_url
+
+
+def _build_message_schema(
+    message: ReportConversationMessage,
+) -> ReportConversationMessageSchema:
+    return ReportConversationMessageSchema(
+        message_id=message.id,
+        role=message.role,
+        content=message.content,
+        created_at=message.created_at,
+    )
+
+
+async def _get_or_create_report_conversation(
+    report: Report,
+    db: AsyncSession,
+) -> ReportConversation:
+    if report.conversation is not None:
+        return report.conversation
+
+    conversation = ReportConversation(
+        report_id=report.id,
+        user_id=report.user_id,
+        suggested_questions=[],
+    )
+    db.add(conversation)
+    await db.flush()
+    if conversation.id is None:
+        conversation.id = uuid.uuid4()
+    report.conversation = conversation
+    return conversation
+
+
+async def _build_report_conversation_response(
+    report: Report,
+    db: AsyncSession,
+) -> ReportConversationResponse:
+    conversation = await _get_or_create_report_conversation(report, db)
+    messages = list(conversation.messages or [])
+    recent_messages = messages[-20:]
+    return ReportConversationResponse(
+        conversation_id=conversation.id,
+        report_id=conversation.report_id,
+        suggested_questions=list(conversation.suggested_questions or []),
+        messages=[_build_message_schema(item) for item in recent_messages],
+    )
+
+
 async def _resolve_artifact_urls(value: Any) -> dict[str, str] | None:
     cleaned = _sanitize_artifact_urls(value)
     if not cleaned:
         return None
 
     resolved = dict(cleaned)
-    storage = get_storage_service()
     for key, object_key in cleaned.items():
         if not key.endswith("_key"):
             continue
         try:
-            resolved[f"{key[:-4]}_url"] = await asyncio.wait_for(
-                storage.get_presigned_url(object_key),
-                timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+            resolved[f"{key[:-4]}_url"] = await _get_presigned_url_with_cache(
+                object_key
             )
         except (StorageServiceError, asyncio.TimeoutError) as exc:
             logger.warning(
@@ -527,10 +629,7 @@ async def _build_image_url(image_key: str | None, image_url: str | None) -> str:
     if not image_key:
         return image_url or ""
     try:
-        return await asyncio.wait_for(
-            get_storage_service().get_presigned_url(image_key),
-            timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
-        )
+        return await _get_presigned_url_with_cache(image_key)
     except (StorageServiceError, asyncio.TimeoutError) as exc:
         logger.warning(
             "report_image_presign_fallback",
@@ -635,6 +734,9 @@ async def get_report_detail(
     result = await db.execute(
         select(Report, AnalysisTask.image_key, AnalysisTask.image_url)
         .join(AnalysisTask, AnalysisTask.id == Report.task_id)
+        .options(
+            selectinload(Report.conversation).selectinload(ReportConversation.messages)
+        )
         .where(
             Report.id == report_id,
             Report.user_id == user_id,
@@ -648,6 +750,7 @@ async def get_report_detail(
     report, image_key, image_url = row
     validated_nutrition = _safe_validate(NutritionData, report.nutrition_json)
     analysis = _build_analysis(report.llm_output_json, report.score)
+    conversation = await _build_report_conversation_response(report, db)
     return ReportDetailResponseSchema(
         report_id=report.id,
         task_id=report.task_id,
@@ -662,6 +765,7 @@ async def get_report_detail(
             final_ingredient_count=len(analysis.ingredients),
         ),
         artifact_urls=await _resolve_artifact_urls(report.artifact_urls),
+        conversation=conversation,
         created_at=report.created_at,
     )
 

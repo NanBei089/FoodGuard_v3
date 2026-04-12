@@ -11,6 +11,7 @@ from app.schemas.analysis_data import HazardItem as HazardSchema
 from app.schemas.analysis_data import IngredientItem as IngredientAnalysisSchema
 from app.schemas.analysis_data import NutritionData as NutritionSchema
 from app.schemas.analysis_data import NutritionItem as NutritionItemSchema
+from app.schemas.report_chat import ReportConversationResponse
 from app.schemas.common import BASE_MODEL_CONFIG, PageResponse
 
 
@@ -166,6 +167,10 @@ class ReportDetailResponseSchema(_ReportSchema):
         default=None,
         description="Generated artifact URLs",
         examples=[{"ocr_full_json_url": "https://minio.example.com/ocr.json"}],
+    )
+    conversation: ReportConversationResponse | None = Field(
+        default=None,
+        description="Report-bound AI assistant conversation snapshot",
     )
     created_at: datetime = Field(
         description="Report creation time", examples=["2026-03-25T12:30:00Z"]

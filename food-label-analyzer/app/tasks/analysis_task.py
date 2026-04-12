@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any
+from typing import Any, Protocol, TypeVar, overload
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
@@ -37,6 +37,31 @@ from app.workers.ocr_worker import TableRecognitionResult
 
 logger = structlog.get_logger(__name__)
 _INTERNAL_ANALYSIS_ERROR_MESSAGE = "Internal analysis pipeline error"
+T = TypeVar("T")
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> dict[str, Any]: ...
+
+
+@overload
+def _to_plain_data(value: None) -> None: ...
+
+
+@overload
+def _to_plain_data(value: dict[str, Any]) -> dict[str, Any]: ...
+
+
+@overload
+def _to_plain_data(value: list[T]) -> list[T]: ...
+
+
+@overload
+def _to_plain_data(value: _SupportsModelDump) -> dict[str, Any]: ...
+
+
+@overload
+def _to_plain_data(value: T) -> T: ...
 
 
 def _to_plain_data(value: Any) -> Any:

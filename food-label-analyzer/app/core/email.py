@@ -9,13 +9,14 @@ from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_fixed,
+    wait_exponential,
 )
 
 from app.core.config import Settings, get_settings
 from app.core.errors import EmailDeliveryError
 
 logger = structlog.get_logger(__name__)
+_SMTP_SEND_TIMEOUT_SECONDS = 10
 _EMAIL_RETRYABLE_EXCEPTIONS = (
     aiosmtplib.SMTPException,
     ConnectionError,
@@ -62,7 +63,7 @@ class EmailService:
         try:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(3),
-                wait=wait_fixed(2),
+                wait=wait_exponential(multiplier=0.5, min=0.5, max=2.0),
                 retry=retry_if_exception_type(_EMAIL_RETRYABLE_EXCEPTIONS),
                 reraise=True,
             ):
@@ -75,6 +76,7 @@ class EmailService:
                         password=self.password,
                         start_tls=self.use_tls and self.port != 465,
                         use_tls=self.use_tls and self.port == 465,
+                        timeout=_SMTP_SEND_TIMEOUT_SECONDS,
                     )
         except _EMAIL_RETRYABLE_EXCEPTIONS as exc:
             logger.warning(

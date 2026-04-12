@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Loader2, MessageSquareText, SendHorizontal, Sparkles } from 'lucide-react';
 import { apiGet, apiPost } from '@/api/client';
 import { Button } from '@/components/ui/Button';
@@ -17,13 +17,17 @@ interface LocalChatMessage extends ReportConversationMessage {
 
 interface ReportChatPanelProps {
   reportId: string;
+  initialConversation?: ReportConversationResponse | null;
 }
 
 function nowIsoString() {
   return new Date().toISOString();
 }
 
-export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
+export const ReportChatPanel = memo(function ReportChatPanel({
+  reportId,
+  initialConversation = null,
+}: ReportChatPanelProps) {
   const [conversationId, setConversationId] = useState('');
   const [messages, setMessages] = useState<LocalChatMessage[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -47,10 +51,50 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
 
   useEffect(() => {
     let cancelled = false;
+    activeStreamRef.current?.abort();
+    activeStreamRef.current = null;
+
+    const loadSuggestions = async () => {
+      setSuggestionsLoading(true);
+      try {
+        const suggestionsRes = await apiPost<ReportChatSuggestionsResponse>(
+          `/reports/${reportId}/chat/suggestions`,
+        );
+        if (!cancelled && suggestionsRes.code === 0 && suggestionsRes.data) {
+          setSuggestions(suggestionsRes.data.suggested_questions || []);
+        }
+      } finally {
+        if (!cancelled) {
+          setSuggestionsLoading(false);
+        }
+      }
+    };
+
+    if (initialConversation?.report_id === reportId) {
+      setConversationId(initialConversation.conversation_id);
+      setMessages(initialConversation.messages);
+      setSuggestions(initialConversation.suggested_questions || []);
+      setError('');
+      setLoading(false);
+      if ((initialConversation.suggested_questions || []).length === 0) {
+        void loadSuggestions();
+      }
+      return () => {
+        cancelled = true;
+        if (activeStreamRef.current) {
+          activeStreamRef.current.abort();
+          activeStreamRef.current = null;
+        }
+      };
+    }
 
     const loadConversation = async () => {
       setLoading(true);
       setError('');
+      setConversationId('');
+      setMessages([]);
+      setSuggestions([]);
+      setSuggestionsLoading(false);
 
       try {
         const res = await apiGet<ReportConversationResponse>(`/reports/${reportId}/chat`);
@@ -67,13 +111,7 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
         setSuggestions(res.data.suggested_questions || []);
 
         if ((res.data.suggested_questions || []).length === 0) {
-          setSuggestionsLoading(true);
-          const suggestionsRes = await apiPost<ReportChatSuggestionsResponse>(
-            `/reports/${reportId}/chat/suggestions`,
-          );
-          if (!cancelled && suggestionsRes.code === 0 && suggestionsRes.data) {
-            setSuggestions(suggestionsRes.data.suggested_questions || []);
-          }
+          await loadSuggestions();
         }
       } catch (err: unknown) {
         if (!cancelled) {
@@ -82,7 +120,6 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          setSuggestionsLoading(false);
         }
       }
     };
@@ -96,7 +133,7 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
         activeStreamRef.current = null;
       }
     };
-  }, [reportId]);
+  }, [initialConversation, reportId]);
 
   useEffect(() => {
     const container = messageListRef.current;
@@ -352,4 +389,4 @@ export function ReportChatPanel({ reportId }: ReportChatPanelProps) {
       </div>
     </aside>
   );
-}
+});

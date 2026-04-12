@@ -21,6 +21,18 @@ export function getApiBaseUrl() {
   return API_BASE_URL;
 }
 
+function isApiResponseEnvelope(value: unknown): value is ApiResponse<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    typeof (value as { code?: unknown }).code === 'number' &&
+    'message' in value &&
+    typeof (value as { message?: unknown }).message === 'string' &&
+    'data' in value
+  );
+}
+
 function persistAuthTokens(tokens: { access_token: string; refresh_token: string }) {
   localStorage.setItem('access_token', tokens.access_token);
   localStorage.setItem('refresh_token', tokens.refresh_token);
@@ -103,7 +115,9 @@ apiClient.interceptors.request.use(
 // Response interceptor for API calls
 apiClient.interceptors.response.use(
   (response) => {
-    return response.data;
+    return (
+      isApiResponseEnvelope(response.data) ? response.data : response
+    ) as unknown as typeof response;
   },
   async (error) => {
     const originalRequest = error.config;

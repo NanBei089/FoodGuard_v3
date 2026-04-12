@@ -270,6 +270,7 @@ def test_main_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         "ocr_runtime": "up",
     }
     assert "X-Request-ID" in response.headers
+    assert response.headers["Content-Security-Policy"].startswith("default-src 'self'")
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["X-XSS-Protection"] == "1; mode=block"

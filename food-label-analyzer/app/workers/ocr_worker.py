@@ -136,13 +136,55 @@ def warmup() -> None:
     _get_nutrition_ocr_engine()
 
 
+def _prepare_ocr_input(image_bytes: bytes) -> bytes:
+    return image_bytes if _is_local_ocr_mode() else _prepare_image_for_remote_ocr(image_bytes)
+
+
+def _extract_layout_results(raw_result: Any) -> list[Any]:
+    if not isinstance(raw_result, dict):
+        return []
+    results = raw_result.get("results", [])
+    if not results or not isinstance(results[0], dict):
+        return []
+    layout_results = results[0].get("layoutParsingResults", [])
+    return layout_results if isinstance(layout_results, list) else []
+
+
+def _build_table_json_from_raw_result(
+    raw_result: Any,
+    *,
+    fallback_text: str,
+) -> tuple[dict[str, Any] | None, bool]:
+    layout_results = _extract_layout_results(raw_result)
+    table_json = None
+    has_table = False
+
+    if layout_results:
+        table_data = _extract_table_from_layout(layout_results)
+        if table_data and "html" in table_data:
+            rows = _html_table_to_structured(table_data["html"])
+            table_json = _convert_table_to_nutrition_json(rows)
+            has_table = bool(table_json and table_json.get("rows"))
+            logger.info("table_html_parsed", rows=len(rows), has_table=has_table)
+
+    if not has_table and fallback_text and "<table" in fallback_text.lower():
+        table_data = _extract_table_from_html_fallback(fallback_text)
+        if table_data and "rows" in table_data:
+            table_json = _convert_table_to_nutrition_json(table_data["rows"])
+            has_table = bool(table_json and table_json.get("rows"))
+            logger.info(
+                "table_from_fallback_parsed",
+                rows=len(table_data["rows"]),
+                has_table=has_table,
+            )
+
+    return table_json, has_table
+
+
 def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
     engine = _get_ocr_engine()
     try:
-        prepared_bytes = (
-            image_bytes if _is_local_ocr_mode() else _prepare_image_for_remote_ocr(image_bytes)
-        )
-        raw_result = engine.ocr(prepared_bytes)
+        raw_result = engine.ocr(_prepare_ocr_input(image_bytes))
         lines = _extract_text_lines_with_nested_fallback(raw_result)
         raw_text = "\n".join(line["text"] for line in lines if line["text"])
         result = OCRTextResult(
@@ -161,42 +203,16 @@ def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
 def recognize_nutrition_table(image_bytes: bytes) -> TableRecognitionResult:
     engine = _get_nutrition_ocr_engine()
     try:
-        prepared_bytes = (
-            image_bytes if _is_local_ocr_mode() else _prepare_image_for_remote_ocr(image_bytes)
-        )
-        raw_result = engine.ocr(prepared_bytes)
+        raw_result = engine.ocr(_prepare_ocr_input(image_bytes))
         lines = _extract_text_lines_with_nested_fallback(raw_result)
         raw_text = "\n".join(line["text"] for line in lines if line["text"])
 
-        table_json = None
+        table_json, has_table = _build_table_json_from_raw_result(
+            raw_result,
+            fallback_text=raw_text,
+        )
         table_html_url = None
         table_xlsx_url = None
-        has_table = False
-
-        layout_results = None
-        if isinstance(raw_result, dict):
-            results = raw_result.get("results", [])
-            if results and isinstance(results[0], dict):
-                layout_results = results[0].get("layoutParsingResults", [])
-
-        if layout_results:
-            table_data = _extract_table_from_layout(layout_results)
-            if table_data and "html" in table_data:
-                rows = _html_table_to_structured(table_data["html"])
-                table_json = _convert_table_to_nutrition_json(rows)
-                has_table = bool(table_json and table_json.get("rows"))
-                logger.info("table_html_parsed", rows=len(rows), has_table=has_table)
-
-        if not has_table and raw_text and "<table" in raw_text.lower():
-            table_data = _extract_table_from_html_fallback(raw_text)
-            if table_data and "rows" in table_data:
-                table_json = _convert_table_to_nutrition_json(table_data["rows"])
-                has_table = bool(table_json and table_json.get("rows"))
-                logger.info(
-                    "table_from_fallback_parsed",
-                    rows=len(table_data["rows"]),
-                    has_table=has_table,
-                )
 
         logger.info(
             "table_recognition_debug",
@@ -261,12 +277,8 @@ def recognize_parallel(
         else:
             full_text_config = _get_ocr_engine().config
             nutrition_config = _get_nutrition_ocr_engine().config
-            prepared_full_text_image_bytes = _prepare_image_for_remote_ocr(
-                full_text_image_bytes
-            )
-            prepared_nutrition_image_bytes = _prepare_image_for_remote_ocr(
-                nutrition_image_bytes
-            )
+            prepared_full_text_image_bytes = _prepare_ocr_input(full_text_image_bytes)
+            prepared_nutrition_image_bytes = _prepare_ocr_input(nutrition_image_bytes)
             job1_result, job2_result = _run_parallel_jobs(
                 prepared_full_text_image_bytes,
                 prepared_nutrition_image_bytes,
@@ -287,27 +299,10 @@ def recognize_parallel(
             source="ocr_runtime",
         )
 
-        layout_results = None
-        if isinstance(job2_result, dict):
-            results = job2_result.get("results", [])
-            if results and isinstance(results[0], dict):
-                layout_results = results[0].get("layoutParsingResults", [])
-
-        table_json = None
-        has_table = False
-        if layout_results:
-            table_data = _extract_table_from_layout(layout_results)
-            if table_data and "html" in table_data:
-                rows = _html_table_to_structured(table_data["html"])
-                table_json = _convert_table_to_nutrition_json(rows)
-                has_table = bool(table_json and table_json.get("rows"))
-
-        if not has_table and full_text_raw and "<table" in full_text_raw.lower():
-            table_data = _extract_table_from_html_fallback(full_text_raw)
-            if table_data and "rows" in table_data:
-                table_json = _convert_table_to_nutrition_json(table_data["rows"])
-                has_table = bool(table_json and table_json.get("rows"))
-
+        table_json, has_table = _build_table_json_from_raw_result(
+            job2_result,
+            fallback_text=nutrition_raw or full_text_raw,
+        )
         nutrition_result.table_json = table_json
         logger.info("table_recognition_completed", has_table=has_table)
 

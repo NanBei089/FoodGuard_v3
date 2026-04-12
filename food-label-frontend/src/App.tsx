@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { setForceLogoutHandler } from './api/client';
 import { AuthLayout } from './components/layout/AuthLayout';
@@ -12,6 +13,8 @@ import History from './pages/History';
 import Onboarding from './pages/Onboarding';
 import Profile from './pages/Profile';
 import ReportDetail from './pages/ReportDetail';
+
+const queryClient = new QueryClient();
 
 function ForceLogoutHandler() {
   const navigate = useNavigate();
@@ -33,26 +36,28 @@ function ForceLogoutHandler() {
 
 function App() {
   return (
-    <Router>
-      <ForceLogoutHandler />
-      <Routes>
-        <Route element={<AuthLayout />}>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-        </Route>
+    <QueryClientProvider client={queryClient}>
+      <Router>
+        <ForceLogoutHandler />
+        <Routes>
+          <Route element={<AuthLayout />}>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+          </Route>
 
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/onboarding" element={<Onboarding />} />
-          <Route path="/analyzing/:taskId" element={<Analyzing />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/reports/:id" element={<ReportDetail />} />
-        </Route>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<Home />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/analyzing/:taskId" element={<Analyzing />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/profile" element={<Profile />} />
+            <Route path="/reports/:id" element={<ReportDetail />} />
+          </Route>
 
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Router>
+    </QueryClientProvider>
   );
 }
 

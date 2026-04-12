@@ -1,3 +1,5 @@
+import type { ReportConversationResponse } from '@/types/report-chat';
+
 export type IngredientRisk = 'safe' | 'warning' | 'danger';
 
 export interface IngredientAnalysisItem {
@@ -71,6 +73,7 @@ export interface ReportDetailData {
   nutrition_parse_source: string | null;
   analysis: ReportAnalysisData;
   rag_summary: ReportRagSummary;
+  conversation: ReportConversationResponse | null;
   created_at: string;
 }
 

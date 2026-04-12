@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { AlertTriangle, BarChart3, Info } from 'lucide-react';
 import {
   getNutritionLevelMeta,
@@ -11,7 +12,10 @@ interface NutritionTableProps {
   nutritionParseSource: string | null;
 }
 
-export function NutritionTable({ nutritionTable, nutritionParseSource }: NutritionTableProps) {
+export const NutritionTable = memo(function NutritionTable({
+  nutritionTable,
+  nutritionParseSource,
+}: NutritionTableProps) {
   return (
     <div className="space-y-8 rounded-[32px] border border-slate-200 bg-white p-8 shadow-sm">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -119,4 +123,4 @@ export function NutritionTable({ nutritionTable, nutritionParseSource }: Nutriti
       )}
     </div>
   );
-}
+});

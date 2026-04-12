@@ -284,6 +284,64 @@ def test_report_service_returns_empty_page_when_total_is_zero(
     assert report_list.total_pages == 0
 
 
+def test_report_service_resolves_artifact_keys_to_signed_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    report_service_module = importlib.reload(
+        importlib.import_module("app.services.report_service")
+    )
+
+    user_id = uuid.uuid4()
+    report_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    report = Report(
+        task_id=task_id,
+        user_id=user_id,
+        ingredients_text="salt",
+        nutrition_json=None,
+        nutrition_parse_source="ocr_text",
+        rag_results_json=None,
+        llm_output_json={
+            "summary": "S" * 60,
+            "ingredients": [],
+            "health_advice": _health_advice_payload(),
+            "score": 80,
+        },
+        score=80,
+        artifact_urls={"ocr_full_result_key": "reports/u/t/ocr/full_text_result.json"},
+    )
+    report.id = report_id
+    report.created_at = created_at
+
+    fake_storage = SimpleNamespace(
+        get_presigned_url=AsyncMock(return_value="https://example.com/artifact.json")
+    )
+    monkeypatch.setattr(
+        report_service_module, "get_storage_service", lambda: fake_storage
+    )
+
+    fake_db = AsyncMock()
+    fake_db.execute = AsyncMock(
+        return_value=_OneOrNoneResult((report, None, "https://example.com/original.png"))
+    )
+
+    detail = asyncio.run(
+        report_service_module.get_report_detail(report.id, user_id, fake_db)
+    )
+
+    assert detail.artifact_urls is not None
+    assert (
+        detail.artifact_urls["ocr_full_result_key"]
+        == "reports/u/t/ocr/full_text_result.json"
+    )
+    assert (
+        detail.artifact_urls["ocr_full_result_url"]
+        == "https://example.com/artifact.json"
+    )
+
+
 def test_report_service_raises_for_missing_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

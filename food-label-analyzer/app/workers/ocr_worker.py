@@ -19,6 +19,9 @@ logger = structlog.get_logger(__name__)
 
 _ENGINE_CACHE: dict[str, "PaddleOCRAPIClient"] = {}
 _engine_lock = threading.Lock()
+_RESULT_DOWNLOAD_RETRYABLE_STATUS_CODES = {403, 404, 409, 425, 429, 500, 502, 503, 504}
+_RESULT_DOWNLOAD_MAX_ATTEMPTS = 3
+_RESULT_DOWNLOAD_RETRY_DELAY_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -217,24 +220,58 @@ class PaddleOCRAPIClient:
         )
 
     def _download_jsonl_results(self, json_url: str) -> list[Any]:
-        response = requests.get(json_url, timeout=self.config.request_timeout_s)
-        response.raise_for_status()
-
-        response_text = response.content.decode("utf-8", errors="replace")
-        results: list[Any] = []
-        for raw_line in response_text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
+        last_error: Exception | None = None
+        for attempt in range(1, _RESULT_DOWNLOAD_MAX_ATTEMPTS + 1):
             try:
-                item = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(item, dict) and "result" in item:
-                results.append(item["result"])
-            else:
-                results.append(item)
-        return results
+                response = requests.get(json_url, timeout=self.config.request_timeout_s)
+                response.raise_for_status()
+
+                response_text = response.content.decode("utf-8", errors="replace")
+                results: list[Any] = []
+                for raw_line in response_text.splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(item, dict) and "result" in item:
+                        results.append(item["result"])
+                    else:
+                        results.append(item)
+                return results
+            except requests.HTTPError as exc:
+                last_error = exc
+                status_code = exc.response.status_code if exc.response is not None else None
+                should_retry = (
+                    attempt < _RESULT_DOWNLOAD_MAX_ATTEMPTS
+                    and status_code in _RESULT_DOWNLOAD_RETRYABLE_STATUS_CODES
+                )
+                if not should_retry:
+                    raise
+                logger.warning(
+                    "ocr_result_download_retrying",
+                    attempt=attempt,
+                    max_attempts=_RESULT_DOWNLOAD_MAX_ATTEMPTS,
+                    status_code=status_code,
+                )
+                time.sleep(_RESULT_DOWNLOAD_RETRY_DELAY_S)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= _RESULT_DOWNLOAD_MAX_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "ocr_result_download_retrying",
+                    attempt=attempt,
+                    max_attempts=_RESULT_DOWNLOAD_MAX_ATTEMPTS,
+                    status_code=None,
+                )
+                time.sleep(_RESULT_DOWNLOAD_RETRY_DELAY_S)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("OCR result download failed without explicit exception")
 
     def ocr(self, image_bytes: bytes, filename: str = "image.jpg") -> dict[str, Any]:
         job_id = self._submit_job(image_bytes, filename)

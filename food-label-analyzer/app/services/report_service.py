@@ -200,6 +200,23 @@ def _sanitize_artifact_urls(value: Any) -> dict[str, str] | None:
     return cleaned or None
 
 
+async def _resolve_artifact_urls(value: Any) -> dict[str, str] | None:
+    cleaned = _sanitize_artifact_urls(value)
+    if not cleaned:
+        return None
+
+    resolved = dict(cleaned)
+    storage = get_storage_service()
+    for key, object_key in cleaned.items():
+        if not key.endswith("_key"):
+            continue
+        try:
+            resolved[f"{key[:-4]}_url"] = await storage.get_presigned_url(object_key)
+        except Exception:
+            continue
+    return resolved
+
+
 def _sanitize_ingredients_text(value: str | None) -> str | None:
     if value is None:
         return None
@@ -615,7 +632,7 @@ async def get_report_detail(
             report.rag_results_json,
             final_ingredient_count=len(analysis.ingredients),
         ),
-        artifact_urls=_sanitize_artifact_urls(report.artifact_urls),
+        artifact_urls=await _resolve_artifact_urls(report.artifact_urls),
         created_at=report.created_at,
     )
 

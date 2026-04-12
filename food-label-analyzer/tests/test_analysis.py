@@ -414,6 +414,12 @@ def test_process_image_task_completes_with_report_payload(
         },
     )
 
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_persist_analysis_artifacts",
+        lambda **kwargs: {"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+
     def fake_complete(**kwargs):
         completions.append(kwargs)
 
@@ -527,6 +533,11 @@ def test_process_image_task_runs_parallel_ocr_when_yolo_succeeds(
     )
 
     monkeypatch.setattr(
+        analysis_task_module,
+        "_persist_analysis_artifacts",
+        lambda **kwargs: {"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+    monkeypatch.setattr(
         analysis_task_module, "_complete_task_with_report", lambda **kwargs: completions.append(kwargs)
     )
     analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
@@ -539,4 +550,131 @@ def test_process_image_task_runs_parallel_ocr_when_yolo_succeeds(
 
     assert result["status"] == "completed"
     assert parallel_inputs == [(b"masked-img", b"cropped-img")]
+    assert completions[0]["nutrition_json"]["parse_method"] == "table_recognition"
+
+
+def test_process_image_task_falls_back_to_sequential_ocr_when_parallel_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    completions: list[dict[str, object]] = []
+    full_text_calls: list[bytes] = []
+    table_calls: list[bytes] = []
+
+    monkeypatch.setattr(
+        analysis_task_module, "_update_task_status", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_download_image", lambda image_key: b"img"
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker,
+        "detect",
+        lambda image_bytes: {"x1": 1, "y1": 2, "x2": 3, "y2": 4, "confidence": 0.9},
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker,
+        "crop_image",
+        lambda image_bytes, bbox: b"cropped-img",
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker,
+        "mask_image",
+        lambda image_bytes, bbox: b"masked-img",
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_parallel",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            analysis_task_module.OCRServiceError("parallel down")
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_full_text",
+        lambda image_bytes: (
+            full_text_calls.append(image_bytes)
+            or OCRTextResult(
+                raw_text="salt, sugar",
+                lines=[{"text": "salt, sugar"}],
+                blocks=[],
+                artifact_json_url="https://example.com/ocr.json",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_nutrition_table",
+        lambda image_bytes: (
+            table_calls.append(image_bytes)
+            or TableRecognitionResult(
+                table_json={
+                    "rows": [
+                        ["item", "per100g"],
+                        ["energy", "120kJ"],
+                    ]
+                },
+                ocr_fallback_text="energy 120kJ 2%",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.nutrition_extractor,
+        "parse",
+        lambda table_result, ocr_fallback_text=None: {
+            "items": [],
+            "parse_method": "table_recognition",
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ingredient_extractor,
+        "extract",
+        lambda full_raw_text: (["salt", "sugar"], "salt, sugar"),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.rag_worker,
+        "retrieve_all",
+        lambda ingredient_terms, ingredients_text: {
+            "source_file": "chromadb",
+            "ingredients_text": ingredients_text,
+            "items_total": 0,
+            "retrieval_results": [],
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module.llm_worker,
+        "analyze",
+        lambda other_ocr_raw_text, nutrition_json, rag_results_json: {
+            "score": 88,
+            "summary": "S" * 60,
+            "top_risks": ["salt"],
+            "ingredients": [],
+            "health_advice": _health_advice_payload(),
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_persist_analysis_artifacts",
+        lambda **kwargs: {"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_complete_task_with_report",
+        lambda **kwargs: completions.append(kwargs),
+    )
+
+    analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
+    try:
+        result = analysis_task_module.process_image_task.run(
+            "task-id", "image-key", str(uuid.uuid4())
+        )
+    finally:
+        analysis_task_module.process_image_task.pop_request()
+
+    assert result["status"] == "completed"
+    assert full_text_calls == [b"masked-img"]
+    assert table_calls == [b"cropped-img"]
     assert completions[0]["nutrition_json"]["parse_method"] == "table_recognition"

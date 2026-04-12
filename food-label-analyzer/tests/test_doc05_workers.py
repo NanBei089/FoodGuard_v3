@@ -368,6 +368,53 @@ def test_ocr_parallel_uses_full_and_cropped_inputs(
     assert result.nutrition_table.ocr_fallback_text == "能量 100kJ 1%"
 
 
+def test_ocr_download_jsonl_results_retries_transient_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
+    attempts: list[int] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, content: bytes = b"") -> None:
+            self.status_code = status_code
+            self.content = content
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                import requests
+
+                response = SimpleNamespace(status_code=self.status_code)
+                raise requests.HTTPError("boom", response=response)
+
+    responses = iter(
+        [
+            FakeResponse(404),
+            FakeResponse(200, b'{"result": {"lines": [{"text": "ok"}]}}\n'),
+        ]
+    )
+
+    monkeypatch.setattr(
+        ocr_module.requests,
+        "get",
+        lambda *args, **kwargs: (attempts.append(1) or next(responses)),
+    )
+    monkeypatch.setattr(ocr_module.time, "sleep", lambda seconds: None)
+
+    client = ocr_module.PaddleOCRAPIClient(
+        ocr_module.OCRConfig(
+            job_url="https://example.com/jobs",
+            token="token",
+            model="model",
+        )
+    )
+
+    results = client._download_jsonl_results("https://example.com/result.jsonl")
+
+    assert len(attempts) == 2
+    assert results == [{"lines": [{"text": "ok"}]}]
+
+
 def test_ocr_table_keeps_raw_rows_without_keyword_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

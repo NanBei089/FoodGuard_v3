@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # --- App ---
     APP_ENV: str = "development"
-    APP_DEBUG: bool = True
+    APP_DEBUG: bool = False
     APP_SECRET_KEY: SecretStr
     API_V1_PREFIX: str = "/api/v1"
     FRONTEND_URL: str = "http://localhost:5173"

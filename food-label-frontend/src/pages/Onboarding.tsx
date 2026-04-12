@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { apiPatch, apiPut } from '@/api/client';
 import { Button } from '@/components/ui/Button';
-import { apiClient } from '@/api/client';
+import { getErrorMessage } from '@/lib/api-errors';
 import { healthConditionDescriptions } from '@/lib/foodguard';
 import { useAuthStore } from '@/store/auth';
-import type { ApiResponse } from '@/types/api';
 import type { User, UserPreferences } from '@/types/auth';
 
 const focusGroupOptions = [
@@ -106,10 +106,10 @@ export default function Onboarding() {
 
     try {
       const [userRes, preferenceRes] = await Promise.all([
-        apiClient.patch<any, ApiResponse<User>>('/users/me', {
+        apiPatch<User>('/users/me', {
           display_name: normalizedDisplayName,
         }),
-        apiClient.put<any, ApiResponse<UserPreferences>>('/preferences/me', {
+        apiPut<UserPreferences>('/preferences/me', {
           focus_groups: form.focus_groups,
           health_conditions: form.health_conditions,
           allergies: form.allergies,
@@ -126,8 +126,8 @@ export default function Onboarding() {
 
       setSession(userRes.data, preferenceRes.data);
       navigate('/');
-    } catch (err: any) {
-      setError(err.response?.data?.message || err.message || '保存引导信息失败');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '保存引导信息失败'));
     } finally {
       setSaving(false);
     }

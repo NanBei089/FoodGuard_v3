@@ -1,5 +1,4 @@
-import { apiClient } from '@/api/client';
-import type { ApiResponse } from '@/types/api';
+import { apiGet } from '@/api/client';
 import type { TokenResponse, User, UserPreferences } from '@/types/auth';
 
 export const emptyPreferences = (): UserPreferences => ({
@@ -35,8 +34,8 @@ export async function fetchSessionContext(): Promise<{
   preferences: UserPreferences;
 }> {
   const [userRes, preferenceRes] = await Promise.all([
-    apiClient.get<any, ApiResponse<User>>('/users/me'),
-    apiClient.get<any, ApiResponse<UserPreferences>>('/preferences/me'),
+    apiGet<User>('/users/me'),
+    apiGet<UserPreferences>('/preferences/me'),
   ]);
 
   if (userRes.code !== 0) {

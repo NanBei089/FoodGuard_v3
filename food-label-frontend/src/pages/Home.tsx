@@ -8,11 +8,11 @@ import {
   Settings2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { apiPost } from '@/api/client';
 import { Button } from '@/components/ui/Button';
-import { apiClient } from '@/api/client';
+import { getErrorMessage } from '@/lib/api-errors';
 import { useAuthStore } from '@/store/auth';
 import { summarizePreferences } from '@/lib/foodguard';
-import type { ApiResponse } from '@/types/api';
 
 const ANALYSIS_UPLOAD_TIMEOUT_MS = 120000;
 
@@ -165,7 +165,7 @@ export default function Home() {
       const analyzingPreviewUrl = URL.createObjectURL(file);
       sessionStorage.setItem('latest_upload_preview', analyzingPreviewUrl);
 
-      const res = await apiClient.post<any, ApiResponse<{ task_id: string }>>(
+      const res = await apiPost<{ task_id: string }>(
         '/analysis/upload',
         formData,
         {
@@ -182,11 +182,16 @@ export default function Home() {
       }
 
       navigate(`/analyzing/${res.data.task_id}`);
-    } catch (err: any) {
-      if (err.code === 'ECONNABORTED') {
+    } catch (err: unknown) {
+      const isTimeout =
+        typeof err === 'object' &&
+        err !== null &&
+        'code' in err &&
+        (err as { code?: string }).code === 'ECONNABORTED';
+      if (isTimeout) {
         setError('上传超时，请稍后重试');
       } else {
-        setError(err.response?.data?.message || '网络请求失败，请稍后重试');
+        setError(getErrorMessage(err, '网络请求失败，请稍后重试'));
       }
     } finally {
       setLoading(false);

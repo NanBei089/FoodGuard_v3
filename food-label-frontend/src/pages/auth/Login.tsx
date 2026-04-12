@@ -1,16 +1,16 @@
 import { useState } from 'react';
 import { AtSign, LockKeyhole } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { apiPost } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { apiClient } from '@/api/client';
 import {
   fetchSessionContext,
   needsOnboarding,
   persistTokens,
 } from '@/lib/auth-session';
+import { getErrorMessage } from '@/lib/api-errors';
 import { useAuthStore } from '@/store/auth';
-import type { ApiResponse } from '@/types/api';
 import type { TokenResponse } from '@/types/auth';
 
 export default function Login() {
@@ -28,7 +28,7 @@ export default function Login() {
     setError('');
 
     try {
-      const res = await apiClient.post<any, ApiResponse<TokenResponse>>('/auth/login', {
+      const res = await apiPost<TokenResponse>('/auth/login', {
         email,
         password,
       });
@@ -42,9 +42,9 @@ export default function Login() {
       const { user, preferences } = await fetchSessionContext();
       setSession(user, preferences);
       navigate(needsOnboarding(user, preferences) ? '/onboarding' : '/');
-    } catch (err: any) {
+    } catch (err: unknown) {
       logout();
-      setError(err.response?.data?.message || '登录请求失败');
+      setError(getErrorMessage(err, '登录请求失败'));
     } finally {
       setLoading(false);
     }
@@ -134,13 +134,13 @@ export default function Login() {
 
       <div className="mt-8 text-center text-xs text-slate-500">
         登录即代表你同意我们的{' '}
-        <a href="#" className="text-emerald-600 hover:underline">
+        <span className="text-emerald-600">
           服务条款
-        </a>{' '}
+        </span>{' '}
         和{' '}
-        <a href="#" className="text-emerald-600 hover:underline">
+        <span className="text-emerald-600">
           隐私政策
-        </a>
+        </span>
       </div>
     </>
   );

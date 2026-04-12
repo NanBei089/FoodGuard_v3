@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -73,19 +73,11 @@ def decode_token(token: str) -> dict[str, Any]:
             token,
             settings.APP_SECRET_KEY.get_secret_value(),
             algorithms=[ALGORITHM],
-            options={"verify_exp": False},
         )
+    except ExpiredSignatureError as exc:
+        raise TokenExpiredError() from exc
     except JWTError as exc:
         raise TokenInvalidError() from exc
-
-    exp = payload.get("exp")
-    try:
-        exp_timestamp = int(exp)
-    except (TypeError, ValueError) as exc:
-        raise TokenInvalidError() from exc
-
-    if exp_timestamp <= int(datetime.now(timezone.utc).timestamp()):
-        raise TokenExpiredError()
     return payload
 
 

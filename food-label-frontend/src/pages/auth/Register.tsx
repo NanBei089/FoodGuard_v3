@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
 import { AtSign, BadgeCheck, LockKeyhole } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { apiPost } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { apiClient } from '@/api/client';
 import {
   fetchSessionContext,
   needsOnboarding,
   persistTokens,
 } from '@/lib/auth-session';
-import { extractApiErrorDetails } from '@/lib/api-errors';
+import { extractApiErrorDetails, getErrorMessage } from '@/lib/api-errors';
 import { useAuthStore } from '@/store/auth';
-import type { ApiResponse } from '@/types/api';
 import type { TokenResponse } from '@/types/auth';
 
 export default function Register() {
@@ -95,7 +94,7 @@ export default function Register() {
     clearErrors();
 
     try {
-      const res = await apiClient.post<any, ApiResponse<{ cooldown_seconds: number }>>(
+      const res = await apiPost<{ cooldown_seconds: number }>(
         '/auth/register/send-code',
         { email },
       );
@@ -106,8 +105,12 @@ export default function Register() {
       }
 
       setCooldown(res.data.cooldown_seconds || 60);
-    } catch (err: any) {
-      applyApiError(err.response?.data, '发送验证码失败', 'email');
+    } catch (err: unknown) {
+      const errorPayload =
+        typeof err === 'object' && err !== null && 'response' in err
+          ? (err as { response?: { data?: unknown } }).response?.data
+          : undefined;
+      applyApiError(errorPayload, '发送验证码失败', 'email');
     }
   };
 
@@ -124,7 +127,7 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const registerRes = await apiClient.post<any, ApiResponse<null>>('/auth/register', {
+      const registerRes = await apiPost<null>('/auth/register', {
         email,
         code,
         password,
@@ -135,7 +138,7 @@ export default function Register() {
         return;
       }
 
-      const loginRes = await apiClient.post<any, ApiResponse<TokenResponse>>('/auth/login', {
+      const loginRes = await apiPost<TokenResponse>('/auth/login', {
         email,
         password,
       });
@@ -148,9 +151,13 @@ export default function Register() {
       const { user, preferences } = await fetchSessionContext();
       setSession(user, preferences);
       navigate(needsOnboarding(user, preferences) ? '/onboarding' : '/');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorPayload =
+        typeof err === 'object' && err !== null && 'response' in err
+          ? (err as { response?: { data?: unknown } }).response?.data
+          : undefined;
       logout();
-      applyApiError(err.response?.data, err.message || '注册请求失败');
+      applyApiError(errorPayload, getErrorMessage(err, '注册请求失败'));
     } finally {
       setLoading(false);
     }
@@ -299,13 +306,13 @@ export default function Register() {
 
       <div className="mt-8 text-center text-xs text-slate-500">
         注册即代表你同意我们的{' '}
-        <a href="#" className="text-emerald-600 hover:underline">
+        <span className="text-emerald-600">
           服务条款
-        </a>{' '}
+        </span>{' '}
         和{' '}
-        <a href="#" className="text-emerald-600 hover:underline">
+        <span className="text-emerald-600">
           隐私政策
-        </a>
+        </span>
       </div>
     </>
   );

@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, FileImage } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { apiGet } from '@/api/client';
 import { Button } from '@/components/ui/Button';
-import { apiClient } from '@/api/client';
-import type { ApiResponse } from '@/types/api';
 
 interface TaskStatus {
   task_id: string;
@@ -25,9 +24,7 @@ export default function Analyzing() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<TaskStatus | null>(null);
   const [error, setError] = useState('');
-  const previewUrl =
-    sessionStorage.getItem('latest_upload_preview') ||
-    'https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=400&q=80';
+  const previewUrl = sessionStorage.getItem('latest_upload_preview') || '';
 
   useEffect(() => {
     if (!taskId) {
@@ -39,7 +36,7 @@ export default function Analyzing() {
 
     const checkStatus = async () => {
       try {
-        const res = await apiClient.get<any, ApiResponse<TaskStatus>>(`/analysis/tasks/${taskId}`);
+        const res = await apiGet<TaskStatus>(`/analysis/tasks/${taskId}`);
 
         if (res.code !== 0) {
           setError(res.message || '分析任务状态获取失败');
@@ -107,7 +104,13 @@ export default function Analyzing() {
           <>
             <div className="mb-8">
               <div className="relative mx-auto h-48 w-48 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner">
-                <img src={previewUrl} alt="分析中" className="h-full w-full object-cover opacity-70" />
+                {previewUrl ? (
+                  <img src={previewUrl} alt="分析中" className="h-full w-full object-cover opacity-70" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-slate-300">
+                    <FileImage className="h-12 w-12" />
+                  </div>
+                )}
                 <div className="absolute inset-0 rounded-2xl border-2 border-emerald-500/50" />
                 <div className="scanner-line animate-scan z-10" />
                 <div className="absolute left-[10%] top-[20%] h-[10%] w-[80%] rounded border border-emerald-400/80 bg-emerald-400/10" />

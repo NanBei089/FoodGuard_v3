@@ -9,7 +9,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
-import { apiClient } from '@/api/client';
+import { apiGet } from '@/api/client';
+import { getErrorMessage } from '@/lib/api-errors';
 import {
   formatReportDate,
   getIngredientRiskMeta,
@@ -19,7 +20,6 @@ import {
   scoreRingOffset,
 } from '@/lib/foodguard';
 import { cn } from '@/lib/utils';
-import type { ApiResponse } from '@/types/api';
 
 interface IngredientAnalysisItem {
   name: string;
@@ -98,15 +98,15 @@ export default function ReportDetail() {
 
     const fetchReport = async () => {
       try {
-        const res = await apiClient.get<any, ApiResponse<ReportDetailData>>(`/reports/${id}`);
+        const res = await apiGet<ReportDetailData>(`/reports/${id}`);
         if (res.code !== 0) {
           setError(res.message || '获取报告失败');
           return;
         }
 
         setReport(res.data);
-      } catch (err: any) {
-        setError(err.response?.data?.message || '请求失败');
+      } catch (err: unknown) {
+        setError(getErrorMessage(err, '请求失败'));
       } finally {
         setLoading(false);
       }

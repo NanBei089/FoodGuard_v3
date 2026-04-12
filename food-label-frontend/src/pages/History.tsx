@@ -10,10 +10,11 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { apiDelete, apiGet } from '@/api/client';
 import { Button } from '@/components/ui/Button';
-import { apiClient } from '@/api/client';
+import { getErrorMessage } from '@/lib/api-errors';
 import { formatReportDate, getScorePalette } from '@/lib/foodguard';
-import type { ApiResponse, PageResponse } from '@/types/api';
+import type { PageResponse } from '@/types/api';
 
 interface ReportListItem {
   report_id: string;
@@ -33,13 +34,14 @@ export default function History() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const fetchReports = async (pageNumber = 1) => {
     try {
       setLoading(true);
       setError('');
 
-      const res = await apiClient.get<any, ApiResponse<PageResponse<ReportListItem>>>(
+      const res = await apiGet<PageResponse<ReportListItem>>(
         `/reports?page=${pageNumber}&page_size=10`,
       );
 
@@ -52,8 +54,8 @@ export default function History() {
       setTotal(res.data.total);
       setPage(res.data.page);
       setPageSize(res.data.page_size);
-    } catch (err: any) {
-      setError(err.response?.data?.message || '获取记录失败');
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, '获取记录失败'));
     } finally {
       setLoading(false);
     }
@@ -66,19 +68,21 @@ export default function History() {
   const handleDelete = async (id: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    setConfirmDeleteId(id);
+  };
 
-    if (!window.confirm('确定要删除这条记录吗？')) {
-      return;
-    }
-
+  const confirmDelete = async (id: string) => {
+    setConfirmDeleteId(null);
     try {
-      const res = await apiClient.delete<any, ApiResponse<null>>(`/reports/${id}`);
+      const res = await apiDelete<null>(`/reports/${id}`);
       if (res.code === 0) {
         setReports((current) => current.filter((item) => item.report_id !== id));
         setTotal((current) => Math.max(0, current - 1));
+      } else {
+        setError(res.message || '删除失败');
       }
     } catch {
-      window.alert('删除失败');
+      setError('删除失败');
     }
   };
 
@@ -275,6 +279,30 @@ export default function History() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {confirmDeleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="mb-2 text-lg font-bold text-slate-900">确认删除</h3>
+            <p className="mb-6 text-sm text-slate-500">确定要删除这条分析记录吗？此操作不可撤销。</p>
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setConfirmDeleteId(null)}
+              >
+                取消
+              </Button>
+              <Button
+                className="flex-1 bg-rose-500 hover:bg-rose-600"
+                onClick={() => confirmDelete(confirmDeleteId)}
+              >
+                删除
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

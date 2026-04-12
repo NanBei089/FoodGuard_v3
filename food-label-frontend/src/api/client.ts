@@ -1,4 +1,12 @@
 import axios from 'axios';
+import type { AxiosRequestConfig } from 'axios';
+import type { ApiResponse } from '@/types/api';
+
+let onForceLogout: (() => void) | null = null;
+
+export function setForceLogoutHandler(handler: (() => void) | null) {
+  onForceLogout = handler;
+}
 
 // Create axios instance with base URL
 export const apiClient = axios.create({
@@ -51,16 +59,52 @@ apiClient.interceptors.response.use(
           // If refresh fails, clear tokens and redirect to login
           localStorage.removeItem('access_token');
           localStorage.removeItem('refresh_token');
-          window.location.href = '/login';
+          if (onForceLogout) {
+            onForceLogout();
+          }
           return Promise.reject(refreshError);
         }
       } else {
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
-        window.location.href = '/login';
+        if (onForceLogout) {
+          onForceLogout();
+        }
       }
     }
     
     return Promise.reject(error);
   }
 );
+
+export function apiGet<T>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
+  return apiClient.get(url, config) as Promise<ApiResponse<T>>;
+}
+
+export function apiPost<T>(
+  url: string,
+  data?: unknown,
+  config?: AxiosRequestConfig,
+): Promise<ApiResponse<T>> {
+  return apiClient.post(url, data, config) as Promise<ApiResponse<T>>;
+}
+
+export function apiPut<T>(
+  url: string,
+  data?: unknown,
+  config?: AxiosRequestConfig,
+): Promise<ApiResponse<T>> {
+  return apiClient.put(url, data, config) as Promise<ApiResponse<T>>;
+}
+
+export function apiPatch<T>(
+  url: string,
+  data?: unknown,
+  config?: AxiosRequestConfig,
+): Promise<ApiResponse<T>> {
+  return apiClient.patch(url, data, config) as Promise<ApiResponse<T>>;
+}
+
+export function apiDelete<T>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
+  return apiClient.delete(url, config) as Promise<ApiResponse<T>>;
+}

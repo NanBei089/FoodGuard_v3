@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { LockKeyhole, ShieldCheck, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { apiGet, apiPatch, apiPost, apiPut } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { apiClient } from '@/api/client';
 import { clearPersistedTokens } from '@/lib/auth-session';
-import { extractApiErrorDetails } from '@/lib/api-errors';
+import { extractApiErrorDetails, getErrorMessage } from '@/lib/api-errors';
 import { getUserInitial, healthConditionDescriptions, healthConditionLabels } from '@/lib/foodguard';
 import { useAuthStore } from '@/store/auth';
-import type { ApiResponse, PageResponse } from '@/types/api';
+import type { PageResponse } from '@/types/api';
 import type { User, UserPreferences } from '@/types/auth';
 
 interface ReportListMeta {
@@ -56,10 +56,9 @@ export default function Profile() {
     const fetchData = async () => {
       try {
         const [userRes, prefRes, reportRes] = await Promise.all([
-          apiClient.get<any, ApiResponse<User>>('/users/me'),
-          apiClient.get<any, ApiResponse<UserPreferences>>('/preferences/me').catch(() => null),
-          apiClient
-            .get<any, ApiResponse<PageResponse<unknown>>>('/reports?page=1&page_size=1')
+          apiGet<User>('/users/me'),
+          apiGet<UserPreferences>('/preferences/me').catch(() => null),
+          apiGet<PageResponse<unknown>>('/reports?page=1&page_size=1')
             .catch(() => null),
         ]);
 
@@ -78,7 +77,7 @@ export default function Profile() {
           setTotalReports(metadata.total || 0);
         }
       } catch (err) {
-        console.error(err);
+        setProfileMessage(getErrorMessage(err, '加载用户数据失败'));
       }
     };
 
@@ -137,10 +136,10 @@ export default function Profile() {
 
     try {
       const [userRes, prefRes] = await Promise.all([
-        apiClient.patch<any, ApiResponse<User>>('/users/me', {
+        apiPatch<User>('/users/me', {
           display_name: displayName.trim(),
         }),
-        apiClient.put<any, ApiResponse<UserPreferences>>('/preferences/me', {
+        apiPut<UserPreferences>('/preferences/me', {
           focus_groups: preferences.focus_groups,
           health_conditions: preferences.health_conditions,
           allergies: preferences.allergies,
@@ -158,8 +157,8 @@ export default function Profile() {
       setUser(userRes.data);
       setPreferences(prefRes.data);
       setProfileMessage('保存成功');
-    } catch (err: any) {
-      setProfileMessage(err.response?.data?.message || err.message || '网络请求失败');
+    } catch (err: unknown) {
+      setProfileMessage(getErrorMessage(err, '网络请求失败'));
     } finally {
       setSavingProfile(false);
     }
@@ -191,7 +190,7 @@ export default function Profile() {
     setChangingPassword(true);
 
     try {
-      const res = await apiClient.post<any, ApiResponse<null>>('/users/change-password', {
+      const res = await apiPost<null>('/users/change-password', {
         current_password: currentPassword,
         new_password: newPassword,
       });
@@ -205,10 +204,14 @@ export default function Profile() {
       setConfirmNewPassword('');
       setPasswordErrors({});
       setPasswordMessage('密码修改成功');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorPayload =
+        typeof err === 'object' && err !== null && 'response' in err
+          ? (err as { response?: { data?: unknown } }).response?.data
+          : undefined;
       const { message, fieldErrors } = extractApiErrorDetails(
-        err.response?.data,
-        err.message || '修改密码失败',
+        errorPayload,
+        getErrorMessage(err, '修改密码失败'),
       );
       if (Object.keys(fieldErrors).length === 0 && message.includes('当前密码')) {
         setPasswordErrors({ current_password: message });
@@ -358,20 +361,6 @@ export default function Profile() {
                 className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
               >
                 退出登录
-              </button>
-            </div>
-
-            <div className="h-px bg-slate-100" />
-
-            <div>
-              <h3 className="mb-1 text-sm font-semibold text-rose-600">注销账号</h3>
-              <p className="mb-3 text-xs text-slate-500">危险操作，当前前端暂不直接暴露。</p>
-              <button
-                type="button"
-                disabled
-                className="w-full rounded-xl border border-rose-100 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-300"
-              >
-                暂未开放
               </button>
             </div>
           </div>

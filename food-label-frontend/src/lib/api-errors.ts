@@ -55,3 +55,18 @@ export function extractApiErrorDetails(
   };
 }
 
+export function getErrorMessage(err: unknown, fallback = '请求失败'): string {
+  if (typeof err === 'object' && err !== null && 'response' in err) {
+    const response = (err as { response?: { data?: { message?: string } } }).response;
+    if (response?.data?.message) {
+      return response.data.message;
+    }
+  }
+
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  return fallback;
+}
+

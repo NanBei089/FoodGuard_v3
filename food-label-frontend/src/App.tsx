@@ -1,7 +1,9 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { setForceLogoutHandler } from './api/client';
 import { AuthLayout } from './components/layout/AuthLayout';
 import { AppLayout } from './components/layout/AppLayout';
-
+import { useAuthStore } from './store/auth';
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
 import Home from './pages/Home';
@@ -11,9 +13,28 @@ import Onboarding from './pages/Onboarding';
 import Profile from './pages/Profile';
 import ReportDetail from './pages/ReportDetail';
 
+function ForceLogoutHandler() {
+  const navigate = useNavigate();
+  const logout = useAuthStore((state) => state.logout);
+
+  useEffect(() => {
+    setForceLogoutHandler(() => {
+      logout();
+      navigate('/login', { replace: true });
+    });
+
+    return () => {
+      setForceLogoutHandler(null);
+    };
+  }, [logout, navigate]);
+
+  return null;
+}
+
 function App() {
   return (
     <Router>
+      <ForceLogoutHandler />
       <Routes>
         <Route element={<AuthLayout />}>
           <Route path="/login" element={<Login />} />

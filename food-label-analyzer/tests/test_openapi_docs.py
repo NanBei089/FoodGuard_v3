@@ -11,6 +11,10 @@ def test_openapi_routes_expose_summary_description_and_responses(monkeypatch) ->
 
     schema = main_module.app.openapi()
     report_detail = schema["paths"]["/api/v1/reports/{report_id}"]["get"]
+    report_chat = schema["paths"]["/api/v1/reports/{report_id}/chat"]["get"]
+    report_chat_stream = schema["paths"]["/api/v1/reports/{report_id}/chat/stream"][
+        "post"
+    ]
     auth_login = schema["paths"]["/api/v1/auth/login"]["post"]
     analysis_upload = schema["paths"]["/api/v1/analysis/upload"]["post"]
 
@@ -20,6 +24,14 @@ def test_openapi_routes_expose_summary_description_and_responses(monkeypatch) ->
         and report_detail["description"]
     )
     assert set(report_detail["responses"].keys()) >= {"200", "401", "404", "422"}
+    assert set(report_chat["responses"].keys()) >= {"200", "401", "404", "422"}
+    assert set(report_chat_stream["responses"].keys()) >= {
+        "200",
+        "401",
+        "404",
+        "422",
+        "503",
+    }
 
     assert isinstance(auth_login.get("summary"), str) and auth_login["summary"]
     assert isinstance(auth_login.get("description"), str) and auth_login["description"]

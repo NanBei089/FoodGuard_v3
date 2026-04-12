@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ReportNotFoundError
 from app.models.analysis_task import AnalysisTask
 from app.models.report import Report
+from app.models.report_conversation import ReportConversation
 from app.schemas.analysis_data import (
     HazardItem,
     HealthAdviceItem,
@@ -633,6 +634,9 @@ async def delete_report(
     if report is None:
         raise ReportNotFoundError()
 
+    await db.execute(
+        delete(ReportConversation).where(ReportConversation.report_id == report_id)
+    )
     report.deleted_at = datetime.now(timezone.utc)
     await db.flush()
 

@@ -3,14 +3,62 @@ import type { AxiosRequestConfig } from 'axios';
 import type { ApiResponse } from '@/types/api';
 
 let onForceLogout: (() => void) | null = null;
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export function setForceLogoutHandler(handler: (() => void) | null) {
   onForceLogout = handler;
 }
 
+export function triggerForceLogout() {
+  if (onForceLogout) {
+    onForceLogout();
+  }
+}
+
+export function getApiBaseUrl() {
+  return API_BASE_URL;
+}
+
+function persistAuthTokens(tokens: { access_token: string; refresh_token: string }) {
+  localStorage.setItem('access_token', tokens.access_token);
+  localStorage.setItem('refresh_token', tokens.refresh_token);
+  apiClient.defaults.headers.common['Authorization'] = `Bearer ${tokens.access_token}`;
+}
+
+export async function refreshAuthTokens(): Promise<string | null> {
+  const refreshToken = localStorage.getItem('refresh_token');
+  if (!refreshToken) {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    triggerForceLogout();
+    return null;
+  }
+
+  try {
+    const res = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+      refresh_token: refreshToken,
+    });
+
+    if (res.data.code === 0) {
+      persistAuthTokens(res.data.data);
+      return res.data.data.access_token;
+    }
+  } catch (refreshError) {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    triggerForceLogout();
+    throw refreshError;
+  }
+
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  triggerForceLogout();
+  return null;
+}
+
 // Create axios instance with base URL
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  baseURL: API_BASE_URL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -41,35 +89,14 @@ apiClient.interceptors.response.use(
     
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      const refreshToken = localStorage.getItem('refresh_token');
-      
-      if (refreshToken) {
-        try {
-          const res = await axios.post(`${import.meta.env.VITE_API_URL || '/api/v1'}/auth/refresh`, {
-            refresh_token: refreshToken
-          });
-          
-          if (res.data.code === 0) {
-            localStorage.setItem('access_token', res.data.data.access_token);
-            localStorage.setItem('refresh_token', res.data.data.refresh_token);
-            apiClient.defaults.headers.common['Authorization'] = `Bearer ${res.data.data.access_token}`;
-            return apiClient(originalRequest);
-          }
-        } catch (refreshError) {
-          // If refresh fails, clear tokens and redirect to login
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          if (onForceLogout) {
-            onForceLogout();
-          }
-          return Promise.reject(refreshError);
+      try {
+        const nextAccessToken = await refreshAuthTokens();
+        if (nextAccessToken) {
+          originalRequest.headers.Authorization = `Bearer ${nextAccessToken}`;
+          return apiClient(originalRequest);
         }
-      } else {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
-        if (onForceLogout) {
-          onForceLogout();
-        }
+      } catch (refreshError) {
+        return Promise.reject(refreshError);
       }
     }
     

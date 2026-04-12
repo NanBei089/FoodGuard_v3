@@ -22,6 +22,7 @@ from app.models.enums import NutritionParseSource
 
 if TYPE_CHECKING:
     from app.models.analysis_task import AnalysisTask
+    from app.models.report_conversation import ReportConversation
     from app.models.user import User
 
 
@@ -59,6 +60,11 @@ class Report(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
     )
     task: Mapped["AnalysisTask"] = relationship(back_populates="report")
     user: Mapped["User"] = relationship(back_populates="reports")
+    conversation: Mapped["ReportConversation | None"] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 __all__ = ["NutritionParseSource", "Report"]

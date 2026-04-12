@@ -11,6 +11,7 @@ from app.db.base import Base, TimeStampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.analysis_task import AnalysisTask
     from app.models.password_reset import PasswordResetToken
+    from app.models.report_conversation import ReportConversation
     from app.models.refresh_token import RefreshToken
     from app.models.report import Report
     from app.models.user_preference import UserPreference
@@ -41,6 +42,10 @@ class User(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
         cascade="all, delete-orphan",
     )
     reports: Mapped[list["Report"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    report_conversations: Mapped[list["ReportConversation"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

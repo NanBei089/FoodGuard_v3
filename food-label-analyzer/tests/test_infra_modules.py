@@ -156,9 +156,10 @@ def test_api_router_registers_expected_v1_prefixes(
     router_module = importlib.import_module("app.api.router")
     importlib.reload(router_module)
 
-    assert captured_prefixes[:5] == [
+    assert captured_prefixes[:6] == [
         "/auth",
         "/analysis",
+        "/reports",
         "/reports",
         "/users",
         "/preferences",

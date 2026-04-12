@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { apiGet } from '@/api/client';
+import { ReportChatPanel } from '@/components/report/ReportChatPanel';
 import { getErrorMessage } from '@/lib/api-errors';
 import {
   formatReportDate,
@@ -144,7 +145,8 @@ export default function ReportDetail() {
   ];
 
   return (
-    <div className="w-full">
+    <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="min-w-0">
       <div className="mb-6">
         <Link
           to="/history"
@@ -521,7 +523,11 @@ export default function ReportDetail() {
           )}
         </div>
       </div>
+      </div>
 
+      <div className="min-w-0">
+        <ReportChatPanel reportId={report.report_id} />
+      </div>
     </div>
   );
 }

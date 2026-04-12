@@ -17,6 +17,8 @@ from app.models.email_verification import EmailVerification, VerificationType
 from app.models.password_reset import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.models.report import Report
+from app.models.report_conversation import ReportConversation
+from app.models.report_conversation_message import ReportConversationMessage
 from app.models.user import User
 from app.models.user_preference import UserPreference
 from app.schemas.analysis_data import (
@@ -35,6 +37,8 @@ def test_doc02_metadata_and_mixins_register_expected_tables() -> None:
         "refresh_tokens",
         "analysis_tasks",
         "reports",
+        "report_conversations",
+        "report_conversation_messages",
         "user_preferences",
     }
 
@@ -58,6 +62,7 @@ def test_user_and_task_models_define_expected_relationships_and_indexes() -> Non
     assert set(user_relationships.keys()) == {
         "password_reset_tokens",
         "preference",
+        "report_conversations",
         "refresh_tokens",
         "reports",
         "tasks",
@@ -127,6 +132,7 @@ def test_report_and_auth_related_models_define_expected_columns_constraints_and_
     assert isinstance(Report.__table__.c["rag_results_json"].type, JSONB)
     assert isinstance(Report.__table__.c["llm_output_json"].type, JSONB)
     assert isinstance(Report.__table__.c["artifact_urls"].type, JSONB)
+    assert isinstance(ReportConversation.__table__.c["suggested_questions"].type, JSONB)
     assert isinstance(UserPreference.__table__.c["focus_groups"].type, JSONB)
     assert "deleted_at" in User.__table__.c
     assert "deleted_at" in Report.__table__.c
@@ -140,6 +146,16 @@ def test_report_and_auth_related_models_define_expected_columns_constraints_and_
                 if index.name == "idx_reports_user_id_created_at"
             ),
         ).compile(dialect=postgresql.dialect()),
+    )
+    assert (
+        list(ReportConversation.__table__.c["report_id"].foreign_keys)[0].ondelete
+        == "CASCADE"
+    )
+    assert (
+        list(
+            ReportConversationMessage.__table__.c["conversation_id"].foreign_keys
+        )[0].ondelete
+        == "CASCADE"
     )
 
 

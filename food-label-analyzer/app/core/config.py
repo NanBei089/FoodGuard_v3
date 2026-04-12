@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     DEEPSEEK_TEMPERATURE: float = 0.0
     DEEPSEEK_MAX_RETRIES: int = 2
     DEEPSEEK_MAX_TOKENS: int = 600
+    REPORT_CHAT_MAX_MESSAGE_CHARS: int = 500
+    REPORT_CHAT_HISTORY_WINDOW: int = 12
+    REPORT_CHAT_SUGGESTION_COUNT: int = 4
 
     # --- Ollama ---
     OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -225,6 +228,29 @@ class Settings(BaseSettings):
     def validate_max_upload_size_mb(cls, value: int) -> int:
         if not 1 <= value <= 50:
             raise ValueError("MAX_UPLOAD_SIZE_MB must be between 1 and 50")
+        return value
+
+    @field_validator("REPORT_CHAT_MAX_MESSAGE_CHARS")
+    @classmethod
+    def validate_report_chat_max_message_chars(cls, value: int) -> int:
+        if not 50 <= value <= 2000:
+            raise ValueError(
+                "REPORT_CHAT_MAX_MESSAGE_CHARS must be between 50 and 2000"
+            )
+        return value
+
+    @field_validator("REPORT_CHAT_HISTORY_WINDOW")
+    @classmethod
+    def validate_report_chat_history_window(cls, value: int) -> int:
+        if not 2 <= value <= 50:
+            raise ValueError("REPORT_CHAT_HISTORY_WINDOW must be between 2 and 50")
+        return value
+
+    @field_validator("REPORT_CHAT_SUGGESTION_COUNT")
+    @classmethod
+    def validate_report_chat_suggestion_count(cls, value: int) -> int:
+        if not 1 <= value <= 10:
+            raise ValueError("REPORT_CHAT_SUGGESTION_COUNT must be between 1 and 10")
         return value
 
 

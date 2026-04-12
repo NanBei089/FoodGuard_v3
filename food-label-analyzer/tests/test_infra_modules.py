@@ -300,14 +300,14 @@ def test_main_health_endpoint_supports_request_id_and_hsts(
     )
 
 
-def test_probe_ocr_runtime_uses_post_and_rejects_invalid_route(
+def test_probe_ocr_runtime_uses_get_and_accepts_missing_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _load_required_env(monkeypatch, SKIP_STARTUP_CHECKS="true")
     main_module = importlib.import_module("app.main")
     main_module = importlib.reload(main_module)
 
-    calls: list[tuple[str, dict[str, str], dict[str, str]]] = []
+    calls: list[tuple[str, dict[str, str]]] = []
 
     class FakeResponse:
         def __init__(self, status_code: int) -> None:
@@ -320,9 +320,47 @@ def test_probe_ocr_runtime_uses_post_and_rejects_invalid_route(
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def post(self, url: str, headers: dict[str, str], data: dict[str, str]):
-            calls.append((url, headers, data))
-            return FakeResponse(405)
+        async def get(self, url: str, headers: dict[str, str]):
+            calls.append((url, headers))
+            return FakeResponse(404)
+
+    monkeypatch.setattr(
+        main_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient()
+    )
+
+    asyncio.run(main_module._probe_ocr_runtime())
+
+    assert calls == [
+        (
+            (
+                "https://paddle-ocr.example.com/api/v1/ocr/job/"
+                "ocrjob-health-check-probe"
+            ),
+            {"Authorization": "bearer paddle-token"},
+        )
+    ]
+
+
+def test_probe_ocr_runtime_rejects_server_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_required_env(monkeypatch, SKIP_STARTUP_CHECKS="true")
+    main_module = importlib.import_module("app.main")
+    main_module = importlib.reload(main_module)
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url: str, headers: dict[str, str]):
+            return FakeResponse(500)
 
     monkeypatch.setattr(
         main_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient()
@@ -330,11 +368,3 @@ def test_probe_ocr_runtime_uses_post_and_rejects_invalid_route(
 
     with pytest.raises(RuntimeError):
         asyncio.run(main_module._probe_ocr_runtime())
-
-    assert calls == [
-        (
-            "https://paddle-ocr.example.com/api/v1/ocr/job",
-            {"Authorization": "bearer paddle-token"},
-            {"model": "PaddleOCR-VL-1.5"},
-        )
-    ]

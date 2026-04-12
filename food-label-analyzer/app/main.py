@@ -27,6 +27,7 @@ from app.schemas.health import HealthCheckResponse, HealthServicesSchema
 
 APP_VERSION = "1.0.0"
 HEALTH_TIMEOUT_SECONDS = 2
+OCR_HEALTHCHECK_JOB_ID = "ocrjob-health-check-probe"
 
 settings = get_settings()
 logger = structlog.get_logger(__name__)
@@ -189,12 +190,11 @@ async def _probe_ocr_runtime() -> None:
     async with httpx.AsyncClient(
         timeout=HEALTH_TIMEOUT_SECONDS, follow_redirects=True
     ) as client:
-        response = await client.post(
-            current_settings.PADDLEOCR_JOB_URL,
+        response = await client.get(
+            f"{current_settings.PADDLEOCR_JOB_URL.rstrip('/')}/{OCR_HEALTHCHECK_JOB_ID}",
             headers=headers,
-            data={"model": current_settings.PADDLEOCR_MODEL},
         )
-        if response.status_code not in {200, 400, 415, 422, 429}:
+        if response.status_code not in {200, 400, 404, 422, 429}:
             raise RuntimeError(
                 f"OCR runtime endpoint failed: {current_settings.PADDLEOCR_JOB_URL} "
                 f"(HTTP {response.status_code})",

@@ -823,6 +823,7 @@ def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) 
     llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
     payload = _valid_llm_payload()
+    captured_messages: list[dict[str, str]] = []
     response = SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -835,7 +836,11 @@ def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) 
         "_get_client",
         lambda: SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=lambda **kwargs: response)
+                completions=SimpleNamespace(
+                    create=lambda **kwargs: (
+                        captured_messages.extend(kwargs.get("messages", [])) or response
+                    )
+                )
             )
         ),
     )
@@ -846,6 +851,48 @@ def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) 
 
     assert result["score"] == 86
     assert len(result["health_advice"]) == 5
+
+
+def test_llm_analyze_includes_recognized_ingredient_terms_in_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
+    monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
+    payload = _valid_llm_payload()
+    captured_messages: list[dict[str, str]] = []
+    response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False))
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "_get_client",
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **kwargs: (
+                        captured_messages.extend(kwargs.get("messages", [])) or response
+                    )
+                )
+            )
+        ),
+    )
+
+    llm_module.analyze(
+        "配料：盐、白砂糖",
+        {"items": [], "parse_method": "empty"},
+        {"retrieval_results": []},
+        recognized_ingredient_terms=["盐", "白砂糖"],
+    )
+
+    user_prompt = captured_messages[-1]["content"]
+    assert "已识别配料清单（共 2 项）" in user_prompt
+    assert '"盐"' in user_prompt
+    assert '"白砂糖"' in user_prompt
 
 
 def test_llm_analyze_repairs_invalid_output(monkeypatch: pytest.MonkeyPatch) -> None:

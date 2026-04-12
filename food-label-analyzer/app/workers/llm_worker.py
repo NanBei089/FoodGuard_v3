@@ -78,11 +78,29 @@ def _serialize_inputs(
     other_ocr_raw_text: str,
     nutrition_json: dict[str, Any],
     rag_results_json: dict[str, Any],
-) -> dict[str, str]:
+    ingredient_terms: list[str] | None = None,
+) -> dict[str, Any]:
+    terms = [
+        term.strip()
+        for term in (ingredient_terms or [])
+        if isinstance(term, str) and term.strip()
+    ]
+    if not terms:
+        retrieval_results = rag_results_json.get("retrieval_results", [])
+        if isinstance(retrieval_results, list):
+            for item in retrieval_results:
+                if not isinstance(item, dict):
+                    continue
+                raw_term = item.get("raw_term")
+                if isinstance(raw_term, str) and raw_term.strip():
+                    terms.append(raw_term.strip())
+
     return {
         "other_ocr_raw_text": other_ocr_raw_text or "（无 OCR 文本）",
         "nutrition_json": json.dumps(nutrition_json, ensure_ascii=False, indent=2),
         "rag_results_json": json.dumps(rag_results_json, ensure_ascii=False, indent=2),
+        "ingredient_terms_json": json.dumps(terms, ensure_ascii=False, indent=2),
+        "ingredient_count": len(terms),
     }
 
 
@@ -91,15 +109,22 @@ def analyze(
     nutrition_json: dict,
     rag_results_json: dict,
     rule_based_score: int | None = None,
+    recognized_ingredient_terms: list[str] | None = None,
+    ingredients_text: str | None = None,
 ) -> dict[str, Any]:
     validate_configuration()
     settings = get_settings()
     client = _get_client()
     prompt = build_food_health_analysis_prompt()
-    inputs = _serialize_inputs(other_ocr_raw_text, nutrition_json, rag_results_json)
+    inputs = _serialize_inputs(
+        other_ocr_raw_text,
+        nutrition_json,
+        rag_results_json,
+        ingredient_terms=recognized_ingredient_terms,
+    )
 
     score_hint = (
-        f"\n\n【强制要求】健康评分必须使用规则计算分数: {rule_based_score}，不得自行计算。"
+        f"\n\n【强制要求】健康评分必须使用规则计算分数 {rule_based_score}，不得自行计算。"
         if rule_based_score is not None
         else ""
     )
@@ -135,7 +160,7 @@ def analyze(
 
 
 def _repair(
-    original_inputs: dict[str, str],
+    original_inputs: dict[str, Any],
     validation_errors: str,
     previous_output: str,
     retry_count: int,

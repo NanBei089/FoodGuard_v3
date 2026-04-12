@@ -13,6 +13,7 @@ from app.core.errors import EmbeddingServiceError
 logger = structlog.get_logger(__name__)
 _HTTP_CLIENT: httpx.Client | None = None
 _http_client_lock = None
+MAX_RAG_TERMS = 30
 
 
 def _get_http_client() -> httpx.Client:
@@ -286,7 +287,7 @@ def retrieve_all(
             normalized_terms.append(normalized)
 
     retrieval_items: list[dict[str, Any]] = []
-    for term in normalized_terms[:10]:
+    for term in normalized_terms[:MAX_RAG_TERMS]:
         ingredient_matches = retrieve_all_ingredients(term, top_k=top_k_ingredients)
         standard_matches = query_gb2760_by_keyword(term, top_k=top_k_per_term)
         combined = ingredient_matches + standard_matches

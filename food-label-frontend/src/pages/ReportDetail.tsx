@@ -220,7 +220,7 @@ export default function ReportDetail() {
               <MetricCard
                 dotClass="bg-blue-500"
                 label="总配料数"
-                value={report.rag_summary?.total_ingredients || ingredients.length}
+                value={ingredients.length}
                 suffix="项"
                 surfaceClass="from-slate-50 to-slate-100/50"
               />
@@ -228,7 +228,7 @@ export default function ReportDetail() {
                 dotClass="bg-rose-500"
                 label="高置信匹配"
                 value={report.rag_summary?.high_match_count || 0}
-                suffix="项"
+                suffix={`/${ingredients.length}项`}
                 valueClass="text-rose-600"
                 surfaceClass="from-rose-50 to-rose-50/30"
               />

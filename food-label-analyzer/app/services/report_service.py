@@ -463,11 +463,11 @@ def _build_analysis(value: Any, score: int) -> AnalysisSchema:
     )
 
 
-def _build_rag_summary(value: Any) -> RagSummarySchema:
+def _build_rag_summary(value: Any, final_ingredient_count: int = 0) -> RagSummarySchema:
     validated = _safe_validate(RAGResults, value)
     if validated is None:
         return RagSummarySchema(
-            total_ingredients=0,
+            total_ingredients=max(final_ingredient_count, 0),
             retrieved_count=0,
             high_match_count=0,
             weak_match_count=0,
@@ -475,7 +475,7 @@ def _build_rag_summary(value: Any) -> RagSummarySchema:
         )
 
     results = list(validated.retrieval_results)
-    total = validated.items_total or len(results)
+    total = max(validated.items_total or len(results), final_ingredient_count)
     high = sum(1 for item in results if item.match_quality == "high")
     weak = sum(1 for item in results if item.match_quality == "weak")
     empty = sum(1 for item in results if item.match_quality == "empty")
@@ -600,6 +600,7 @@ async def get_report_detail(
 
     report, image_key, image_url = row
     validated_nutrition = _safe_validate(NutritionData, report.nutrition_json)
+    analysis = _build_analysis(report.llm_output_json, report.score)
     return ReportDetailResponseSchema(
         report_id=report.id,
         task_id=report.task_id,
@@ -608,8 +609,11 @@ async def get_report_detail(
         nutrition=_format_nutrition(validated_nutrition),
         nutrition_table=_build_nutrition_table(validated_nutrition),
         nutrition_parse_source=report.nutrition_parse_source,
-        analysis=_build_analysis(report.llm_output_json, report.score),
-        rag_summary=_build_rag_summary(report.rag_results_json),
+        analysis=analysis,
+        rag_summary=_build_rag_summary(
+            report.rag_results_json,
+            final_ingredient_count=len(analysis.ingredients),
+        ),
         artifact_urls=_sanitize_artifact_urls(report.artifact_urls),
         created_at=report.created_at,
     )

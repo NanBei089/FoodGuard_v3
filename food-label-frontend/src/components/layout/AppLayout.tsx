@@ -8,6 +8,7 @@ import { getUserInitial } from '@/lib/foodguard';
 export function AppLayout() {
   const location = useLocation();
   const { isAuthenticated, needsOnboarding, user, preferences, setSession } = useAuthStore();
+  const isReportDetailPage = /^\/reports\/[^/]+$/.test(location.pathname);
 
   useEffect(() => {
     if (!isAuthenticated || (user && preferences)) {
@@ -117,7 +118,12 @@ export function AppLayout() {
         </div>
       </nav>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col px-6 py-8 md:py-10">
+      <main
+        className={cn(
+          'mx-auto flex w-full flex-1 flex-col px-6 py-8 md:py-10',
+          isReportDetailPage ? 'max-w-[92rem] 2xl:max-w-[96rem]' : 'max-w-7xl',
+        )}
+      >
         <Outlet />
       </main>
     </div>

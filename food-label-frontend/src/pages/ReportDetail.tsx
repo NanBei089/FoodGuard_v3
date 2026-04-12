@@ -145,7 +145,7 @@ export default function ReportDetail() {
   ];
 
   return (
-    <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_400px]">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.18fr)_360px] 2xl:gap-8 2xl:grid-cols-[minmax(0,1.26fr)_380px]">
       <div className="min-w-0">
       <div className="mb-6">
         <Link
@@ -337,7 +337,7 @@ export default function ReportDetail() {
               <div>
                 <h4 className="mb-4 text-sm font-semibold text-slate-900">详细配料列表</h4>
                 {ingredients.length > 0 ? (
-                  <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
                     {ingredients.map((item) => {
                       const riskMeta = getIngredientRiskMeta(item.risk);
                       return (
@@ -480,7 +480,7 @@ export default function ReportDetail() {
 
           {activeTab === 'advice' && (
             <div className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
                 {healthAdvice.length > 0 ? (
                   healthAdvice.map((item) => {
                     const riskMeta = getIngredientRiskMeta(item.risk);

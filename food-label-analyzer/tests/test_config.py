@@ -194,7 +194,7 @@ def test_env_example_keys_match_settings_fields() -> None:
 def test_env_example_contains_expected_defaults() -> None:
     env_values = parse_env_example()
 
-    assert env_values["PADDLEOCR_MODE"] == "local"
+    assert env_values["PADDLEOCR_MODE"] == "remote"
     assert env_values["PADDLEOCR_DEVICE"] == "auto"
     assert env_values["PADDLEOCR_LOCAL_PRECISION"] == "fp16"
     assert env_values["CHROMADB_COLLECTION_INGREDIENTS"] == "gb2760_a1_grouped"

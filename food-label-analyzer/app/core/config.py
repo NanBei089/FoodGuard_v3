@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     MINIO_BUCKET_NAME: str = "food-analyzer"
 
     # --- PaddleOCR (在线 API) ---
-    PADDLEOCR_MODE: Literal["local", "remote"] = "local"
+    PADDLEOCR_MODE: Literal["local", "remote"] = "remote"
     PADDLEOCR_DEVICE: Literal["auto", "gpu", "cpu"] = "auto"
     PADDLEOCR_LOCAL_MODEL_DIR: str | None = "./models_store/paddleocr"
     PADDLEOCR_LOCAL_ENABLE_MKLDNN: bool = True

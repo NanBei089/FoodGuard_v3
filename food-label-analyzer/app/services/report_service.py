@@ -274,31 +274,12 @@ def _build_message_schema(
     )
 
 
-async def _get_or_create_report_conversation(
+def _build_report_conversation_response(
     report: Report,
-    db: AsyncSession,
-) -> ReportConversation:
-    if report.conversation is not None:
-        return report.conversation
-
-    conversation = ReportConversation(
-        report_id=report.id,
-        user_id=report.user_id,
-        suggested_questions=[],
-    )
-    db.add(conversation)
-    await db.flush()
-    if conversation.id is None:
-        conversation.id = uuid.uuid4()
-    report.conversation = conversation
-    return conversation
-
-
-async def _build_report_conversation_response(
-    report: Report,
-    db: AsyncSession,
-) -> ReportConversationResponse:
-    conversation = await _get_or_create_report_conversation(report, db)
+) -> ReportConversationResponse | None:
+    conversation = report.conversation
+    if conversation is None:
+        return None
     messages = list(conversation.messages or [])
     recent_messages = messages[-20:]
     return ReportConversationResponse(
@@ -750,7 +731,7 @@ async def get_report_detail(
     report, image_key, image_url = row
     validated_nutrition = _safe_validate(NutritionData, report.nutrition_json)
     analysis = _build_analysis(report.llm_output_json, report.score)
-    conversation = await _build_report_conversation_response(report, db)
+    conversation = _build_report_conversation_response(report)
     return ReportDetailResponseSchema(
         report_id=report.id,
         task_id=report.task_id,

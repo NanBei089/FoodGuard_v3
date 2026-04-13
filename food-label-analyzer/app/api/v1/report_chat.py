@@ -26,9 +26,9 @@ router = APIRouter()
 
 @router.get(
     "/{report_id}/chat",
-    response_model=ApiResponse[ReportConversationResponse],
+    response_model=ApiResponse[ReportConversationResponse | None],
     summary="获取报告专属问答会话",
-    description="返回当前报告绑定的单线程对话记录；若会话不存在则自动创建空会话。",
+    description="返回当前报告绑定的单线程对话记录；若会话尚未开始，则返回空数据。",
     responses={
         200: {"description": "查询成功"},
         401: {"description": "未认证"},
@@ -39,7 +39,7 @@ async def get_chat(
     report_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ApiResponse[ReportConversationResponse]:
+) -> ApiResponse[ReportConversationResponse | None]:
     payload = await get_report_conversation(report_id, current_user.id, db)
     return success_response(payload)
 
@@ -48,7 +48,7 @@ async def get_chat(
     "/{report_id}/chat/suggestions",
     response_model=ApiResponse[ReportChatSuggestionsResponse],
     summary="获取报告专属快捷提问",
-    description="返回当前报告的快捷提问；若尚未生成则调用模型生成并缓存。",
+    description="返回当前报告的快捷提问；若尚未生成则按需调用模型生成。",
     responses={
         200: {"description": "查询成功"},
         401: {"description": "未认证"},

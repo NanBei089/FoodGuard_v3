@@ -151,6 +151,40 @@ def test_report_chat_router_endpoints(monkeypatch) -> None:
     assert "event: done" in stream_response.text
 
 
+def test_report_chat_router_returns_null_when_conversation_missing(monkeypatch) -> None:
+    app, api_module = _build_report_chat_app(monkeypatch)
+
+    current_user = User(
+        email="user@example.com",
+        password_hash="hashed",
+        is_verified=True,
+        is_active=True,
+    )
+    current_user.id = uuid.uuid4()
+    fake_db = AsyncMock()
+
+    async def override_db():
+        yield fake_db
+
+    async def override_user():
+        return current_user
+
+    async def fake_get_report_conversation(report_id_value, user_id, db):
+        assert report_id_value is not None
+        assert user_id == current_user.id
+        return None
+
+    app.dependency_overrides[api_module.get_db] = override_db
+    app.dependency_overrides[api_module.get_current_user] = override_user
+    monkeypatch.setattr(api_module, "get_report_conversation", fake_get_report_conversation)
+
+    with TestClient(app) as client:
+        response = client.get(f"/reports/{uuid.uuid4()}/chat")
+
+    assert response.status_code == 200
+    assert response.json()["data"] is None
+
+
 def test_report_chat_service_uses_cached_suggestions(monkeypatch) -> None:
     load_required_env(monkeypatch)
     service_module = importlib.reload(
@@ -220,6 +254,91 @@ def test_report_chat_service_uses_cached_suggestions(monkeypatch) -> None:
     assert result.suggested_questions == ["问题一", "问题二"]
 
 
+def test_report_chat_service_returns_null_conversation_without_creating(
+    monkeypatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.report_chat_service")
+    )
+
+    report_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    report = Report(
+        task_id=uuid.uuid4(),
+        user_id=user_id,
+        llm_output_json={},
+        score=80,
+    )
+    report.id = report_id
+    report.created_at = datetime.now(timezone.utc)
+    report.conversation = None
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.execute = AsyncMock(
+        return_value=SimpleNamespace(scalar_one_or_none=lambda: report)
+    )
+
+    result = asyncio.run(
+        service_module.get_report_conversation(report_id, user_id, fake_db)
+    )
+
+    assert result is None
+    fake_db.add.assert_not_called()
+    fake_db.commit.assert_not_awaited()
+
+
+def test_report_chat_service_suggestions_do_not_create_conversation(monkeypatch) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.report_chat_service")
+    )
+
+    report_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    report = Report(
+        task_id=uuid.uuid4(),
+        user_id=user_id,
+        ingredients_text="水、白砂糖、食用盐",
+        nutrition_json=None,
+        rag_results_json=None,
+        llm_output_json={
+            "score": 80,
+            "summary": "这份食品整体风险中等。",
+            "hazards": [],
+            "benefits": [],
+            "ingredients": [],
+            "health_advice": [],
+        },
+        score=80,
+    )
+    report.id = report_id
+    report.created_at = datetime.now(timezone.utc)
+    report.conversation = None
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.execute = AsyncMock(
+        return_value=SimpleNamespace(scalar_one_or_none=lambda: report)
+    )
+
+    monkeypatch.setattr(service_module, "_get_preference", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        service_module,
+        "generate_suggested_questions",
+        AsyncMock(return_value=["这份报告里最值得关注的风险是什么？"]),
+    )
+
+    result = asyncio.run(
+        service_module.get_or_generate_suggestions(report_id, user_id, fake_db)
+    )
+
+    assert result.suggested_questions == ["这份报告里最值得关注的风险是什么？"]
+    fake_db.add.assert_not_called()
+    fake_db.commit.assert_not_awaited()
+
+
 def test_report_chat_service_stream_persists_user_and_assistant_messages(
     monkeypatch,
 ) -> None:
@@ -275,8 +394,8 @@ def test_report_chat_service_stream_persists_user_and_assistant_messages(
     monkeypatch.setattr(service_module, "_get_owned_report", AsyncMock(return_value=report))
     monkeypatch.setattr(
         service_module,
-        "_get_or_create_conversation",
-        AsyncMock(return_value=conversation),
+        "_get_or_create_conversation_for_write",
+        AsyncMock(return_value=(conversation, False)),
     )
     monkeypatch.setattr(
         service_module,
@@ -362,8 +481,8 @@ def test_report_chat_service_stream_does_not_persist_assistant_on_failure(
     monkeypatch.setattr(service_module, "_get_owned_report", AsyncMock(return_value=report))
     monkeypatch.setattr(
         service_module,
-        "_get_or_create_conversation",
-        AsyncMock(return_value=conversation),
+        "_get_or_create_conversation_for_write",
+        AsyncMock(return_value=(conversation, False)),
     )
     monkeypatch.setattr(
         service_module,

@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator
 
 import structlog
 from sqlalchemy import delete, desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -159,12 +160,22 @@ async def _get_preference(user_id: uuid.UUID, db: AsyncSession) -> UserPreferenc
     return result.scalar_one_or_none()
 
 
-async def _get_or_create_conversation(
+async def _get_persisted_conversation(
+    report_id: uuid.UUID,
+    db: AsyncSession,
+) -> ReportConversation | None:
+    result = await db.execute(
+        select(ReportConversation).where(ReportConversation.report_id == report_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_or_create_conversation_for_write(
     report: Report,
     db: AsyncSession,
-) -> ReportConversation:
+) -> tuple[ReportConversation, bool]:
     if report.conversation is not None:
-        return report.conversation
+        return report.conversation, False
 
     conversation = ReportConversation(
         report_id=report.id,
@@ -172,20 +183,29 @@ async def _get_or_create_conversation(
         suggested_questions=[],
     )
     db.add(conversation)
-    await db.flush()
-    await db.commit()
-    await db.refresh(conversation)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        existing = await _get_persisted_conversation(report.id, db)
+        if existing is None:
+            raise
+        return existing, False
+
     report.conversation = conversation
-    return conversation
+    return conversation, True
 
 
 async def get_report_conversation(
     report_id: uuid.UUID,
     user_id: uuid.UUID,
     db: AsyncSession,
-) -> ReportConversationResponse:
+) -> ReportConversationResponse | None:
     report = await _get_owned_report(report_id, user_id, db)
-    conversation = await _get_or_create_conversation(report, db)
+    conversation = report.conversation
+    if conversation is None:
+        return None
+
     if not conversation.messages:
         result = await db.execute(
             select(ReportConversationMessage)
@@ -202,14 +222,15 @@ async def get_or_generate_suggestions(
     db: AsyncSession,
 ) -> ReportChatSuggestionsResponse:
     report = await _get_owned_report(report_id, user_id, db)
-    conversation = await _get_or_create_conversation(report, db)
-    existing = _normalize_suggested_questions(
-        list(conversation.suggested_questions or []),
-        get_settings().REPORT_CHAT_SUGGESTION_COUNT,
-    )
-    if existing:
-        conversation.suggested_questions = existing
-        return ReportChatSuggestionsResponse(suggested_questions=existing)
+    conversation = report.conversation
+    if conversation is not None:
+        existing = _normalize_suggested_questions(
+            list(conversation.suggested_questions or []),
+            get_settings().REPORT_CHAT_SUGGESTION_COUNT,
+        )
+        if existing:
+            conversation.suggested_questions = existing
+            return ReportChatSuggestionsResponse(suggested_questions=existing)
 
     preference = await _get_preference(user_id, db)
     preference_context = _build_preference_context(preference)
@@ -228,9 +249,10 @@ async def get_or_generate_suggestions(
         logger.warning("report_chat_suggestions_fallback", report_id=str(report_id))
         suggested_questions = _build_fallback_suggestions(report, preference_context)
 
-    conversation.suggested_questions = suggested_questions
-    conversation.updated_at = datetime.now(timezone.utc)
-    await db.commit()
+    if conversation is not None:
+        conversation.suggested_questions = suggested_questions
+        conversation.updated_at = datetime.now(timezone.utc)
+        await db.commit()
     return ReportChatSuggestionsResponse(suggested_questions=suggested_questions)
 
 
@@ -268,11 +290,15 @@ async def stream_report_chat(
         raise ValidationException(message=f"问题长度不能超过 {max_chars} 个字符")
 
     report = await _get_owned_report(report_id, user_id, db)
-    conversation = await _get_or_create_conversation(report, db)
-    history = await _load_recent_history(conversation.id, db)
     preference = await _get_preference(user_id, db)
     report_context = _build_report_context(report)
     preference_context = _build_preference_context(preference)
+    conversation, conversation_created = await _get_or_create_conversation_for_write(
+        report, db
+    )
+    history = (
+        [] if conversation_created else await _load_recent_history(conversation.id, db)
+    )
 
     user_message = ReportConversationMessage(
         conversation_id=conversation.id,

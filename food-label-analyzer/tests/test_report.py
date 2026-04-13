@@ -168,14 +168,14 @@ def test_report_service_builds_list_and_detail(monkeypatch: pytest.MonkeyPatch) 
     conversation = ReportConversation(
         report_id=report_id,
         user_id=user_id,
-        suggested_questions=["杩欎唤鎶ュ憡閲屾渶闇€瑕佹敞鎰忕殑椋庨櫓鏄粈涔堬紵"],
+        suggested_questions=["这份报告里最需要注意的风险是什么？"],
     )
     conversation.id = uuid.uuid4()
     conversation.messages = [
         ReportConversationMessage(
             conversation_id=conversation.id,
             role="assistant",
-            content="杩欎唤鎶ュ憡鎻愮ず閽犲惈閲忓亸楂樸€?",
+            content="这份报告提示钠含量偏高。",
         )
     ]
     conversation.messages[0].id = uuid.uuid4()
@@ -233,11 +233,13 @@ def test_report_service_builds_list_and_detail(monkeypatch: pytest.MonkeyPatch) 
     assert detail.rag_summary.empty_count == 1
     assert detail.artifact_urls == {"ocr_full_json_url": "https://example.com/ocr.json"}
     assert detail.conversation is not None
+    fake_db.add.assert_not_called()
+    fake_db.flush.assert_not_awaited()
     assert (
         detail.conversation.suggested_questions[0]
-        == "杩欎唤鎶ュ憡閲屾渶闇€瑕佹敞鎰忕殑椋庨櫓鏄粈涔堬紵"
+        == "这份报告里最需要注意的风险是什么？"
     )
-    assert detail.conversation.messages[0].content == "杩欎唤鎶ュ憡鎻愮ず閽犲惈閲忓亸楂樸€?"
+    assert detail.conversation.messages[0].content == "这份报告提示钠含量偏高。"
 
 
 def test_report_service_sanitizes_legacy_html_polluted_ingredients_text(
@@ -290,7 +292,9 @@ def test_report_service_sanitizes_legacy_html_polluted_ingredients_text(
     )
 
     assert detail.ingredients_text == "\u897f\u6885100%"
-    assert detail.conversation is not None
+    assert detail.conversation is None
+    fake_db.add.assert_not_called()
+    fake_db.flush.assert_not_awaited()
 
 
 def test_report_service_returns_empty_page_when_total_is_zero(
@@ -372,7 +376,9 @@ def test_report_service_resolves_artifact_keys_to_signed_urls(
         detail.artifact_urls["ocr_full_result_url"]
         == "https://example.com/artifact.json"
     )
-    assert detail.conversation is not None
+    assert detail.conversation is None
+    fake_db.add.assert_not_called()
+    fake_db.flush.assert_not_awaited()
 
 
 def test_report_service_falls_back_to_existing_urls_when_presign_fails(

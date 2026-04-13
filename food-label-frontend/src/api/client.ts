@@ -115,9 +115,17 @@ apiClient.interceptors.request.use(
 // Response interceptor for API calls
 apiClient.interceptors.response.use(
   (response) => {
-    return (
-      isApiResponseEnvelope(response.data) ? response.data : response
-    ) as unknown as typeof response;
+    if (isApiResponseEnvelope(response.data)) {
+      return response;
+    }
+
+    const method = response.config?.method?.toUpperCase();
+    const url = response.config?.url;
+    throw new Error(
+      method && url
+        ? `Unexpected API response format from ${method} ${url}`
+        : 'Unexpected API response format',
+    );
   },
   async (error) => {
     const originalRequest = error.config;
@@ -140,7 +148,9 @@ apiClient.interceptors.response.use(
 );
 
 export function apiGet<T>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-  return apiClient.get(url, config) as Promise<ApiResponse<T>>;
+  return apiClient
+    .get<ApiResponse<T>>(url, config)
+    .then((response) => response.data);
 }
 
 export function apiPost<T>(
@@ -148,7 +158,9 @@ export function apiPost<T>(
   data?: unknown,
   config?: AxiosRequestConfig,
 ): Promise<ApiResponse<T>> {
-  return apiClient.post(url, data, config) as Promise<ApiResponse<T>>;
+  return apiClient
+    .post<ApiResponse<T>>(url, data, config)
+    .then((response) => response.data);
 }
 
 export function apiPut<T>(
@@ -156,7 +168,9 @@ export function apiPut<T>(
   data?: unknown,
   config?: AxiosRequestConfig,
 ): Promise<ApiResponse<T>> {
-  return apiClient.put(url, data, config) as Promise<ApiResponse<T>>;
+  return apiClient
+    .put<ApiResponse<T>>(url, data, config)
+    .then((response) => response.data);
 }
 
 export function apiPatch<T>(
@@ -164,9 +178,13 @@ export function apiPatch<T>(
   data?: unknown,
   config?: AxiosRequestConfig,
 ): Promise<ApiResponse<T>> {
-  return apiClient.patch(url, data, config) as Promise<ApiResponse<T>>;
+  return apiClient
+    .patch<ApiResponse<T>>(url, data, config)
+    .then((response) => response.data);
 }
 
 export function apiDelete<T>(url: string, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-  return apiClient.delete(url, config) as Promise<ApiResponse<T>>;
+  return apiClient
+    .delete<ApiResponse<T>>(url, config)
+    .then((response) => response.data);
 }

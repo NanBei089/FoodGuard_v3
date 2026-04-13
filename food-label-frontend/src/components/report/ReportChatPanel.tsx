@@ -24,23 +24,57 @@ function nowIsoString() {
   return new Date().toISOString();
 }
 
+function buildConversationState(
+  reportId: string,
+  initialConversation: ReportConversationResponse | null,
+) {
+  if (initialConversation?.report_id !== reportId) {
+    return {
+      conversationId: '',
+      messages: [] as LocalChatMessage[],
+      suggestions: [] as string[],
+      hasConversation: false,
+    };
+  }
+
+  return {
+    conversationId: initialConversation.conversation_id,
+    messages: [...initialConversation.messages],
+    suggestions: [...(initialConversation.suggested_questions || [])],
+    hasConversation: true,
+  };
+}
+
 export const ReportChatPanel = memo(function ReportChatPanel({
   reportId,
   initialConversation = null,
 }: ReportChatPanelProps) {
-  const [conversationId, setConversationId] = useState('');
-  const [messages, setMessages] = useState<LocalChatMessage[]>([]);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [conversationId, setConversationId] = useState(
+    () => buildConversationState(reportId, initialConversation).conversationId,
+  );
+  const [messages, setMessages] = useState<LocalChatMessage[]>(
+    () => buildConversationState(reportId, initialConversation).messages,
+  );
+  const [suggestions, setSuggestions] = useState<string[]>(
+    () => buildConversationState(reportId, initialConversation).suggestions,
+  );
+  const [loading, setLoading] = useState(
+    () => !buildConversationState(reportId, initialConversation).hasConversation,
+  );
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
+  const initialConversationRef = useRef(initialConversation);
   const activeStreamRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
   const canSend = input.trim().length > 0 && !sending;
+
+  useEffect(() => {
+    initialConversationRef.current = initialConversation;
+  }, [initialConversation]);
 
   useEffect(() => {
     return () => {
@@ -54,6 +88,16 @@ export const ReportChatPanel = memo(function ReportChatPanel({
     activeStreamRef.current?.abort();
     activeStreamRef.current = null;
 
+    const initialState = buildConversationState(
+      reportId,
+      initialConversationRef.current,
+    );
+    setConversationId(initialState.conversationId);
+    setMessages(initialState.messages);
+    setSuggestions(initialState.suggestions);
+    setError('');
+    setSuggestionsLoading(false);
+
     const loadSuggestions = async () => {
       setSuggestionsLoading(true);
       try {
@@ -63,6 +107,10 @@ export const ReportChatPanel = memo(function ReportChatPanel({
         if (!cancelled && suggestionsRes.code === 0 && suggestionsRes.data) {
           setSuggestions(suggestionsRes.data.suggested_questions || []);
         }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setError((current) => current || getErrorMessage(err, '加载快捷提问失败'));
+        }
       } finally {
         if (!cancelled) {
           setSuggestionsLoading(false);
@@ -70,13 +118,9 @@ export const ReportChatPanel = memo(function ReportChatPanel({
       }
     };
 
-    if (initialConversation?.report_id === reportId) {
-      setConversationId(initialConversation.conversation_id);
-      setMessages(initialConversation.messages);
-      setSuggestions(initialConversation.suggested_questions || []);
-      setError('');
+    if (initialState.hasConversation) {
       setLoading(false);
-      if ((initialConversation.suggested_questions || []).length === 0) {
+      if (initialState.suggestions.length === 0) {
         void loadSuggestions();
       }
       return () => {
@@ -97,12 +141,19 @@ export const ReportChatPanel = memo(function ReportChatPanel({
       setSuggestionsLoading(false);
 
       try {
-        const res = await apiGet<ReportConversationResponse>(`/reports/${reportId}/chat`);
+        const res = await apiGet<ReportConversationResponse | null>(
+          `/reports/${reportId}/chat`,
+        );
         if (cancelled) {
           return;
         }
-        if (res.code !== 0 || !res.data) {
+        if (res.code !== 0) {
           setError(res.message || '加载问答会话失败');
+          return;
+        }
+
+        if (!res.data) {
+          await loadSuggestions();
           return;
         }
 
@@ -124,7 +175,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
       }
     };
 
-    loadConversation();
+    void loadConversation();
 
     return () => {
       cancelled = true;
@@ -133,7 +184,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
         activeStreamRef.current = null;
       }
     };
-  }, [initialConversation, reportId]);
+  }, [reportId]);
 
   useEffect(() => {
     const container = messageListRef.current;

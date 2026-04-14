@@ -247,7 +247,7 @@ def test_main_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         main_module,
         "_run_with_timeout",
-        AsyncMock(side_effect=["up", "up", "up", "up", "up", "up", "up"]),
+        AsyncMock(side_effect=["up", "up", "up", "up", "up", "up", "up", "up"]),
     )
 
     with TestClient(main_module.app) as client:
@@ -267,7 +267,8 @@ def test_main_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         "yolo_model": "up",
         "chromadb": "up",
         "ollama_embedding": "up",
-        "ocr_runtime": "up",
+        "ocr_local_runtime": "up",
+        "ocr_remote_api": "up",
     }
     assert "X-Request-ID" in response.headers
     assert response.headers["Content-Security-Policy"].startswith("default-src 'self'")
@@ -288,7 +289,7 @@ def test_main_health_endpoint_supports_request_id_and_hsts(
     monkeypatch.setattr(
         main_module,
         "_run_with_timeout",
-        AsyncMock(side_effect=["down", "up", "up", "up", "up", "up", "up"]),
+        AsyncMock(side_effect=["down", "up", "up", "up", "up", "up", "up", "up"]),
     )
 
     with TestClient(main_module.app, base_url="https://testserver") as client:
@@ -303,7 +304,7 @@ def test_main_health_endpoint_supports_request_id_and_hsts(
     )
 
 
-def test_probe_ocr_runtime_uses_get_and_accepts_missing_job(
+def test_probe_remote_ocr_runtime_uses_get_and_accepts_missing_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _load_required_env(monkeypatch, SKIP_STARTUP_CHECKS="true")
@@ -331,7 +332,7 @@ def test_probe_ocr_runtime_uses_get_and_accepts_missing_job(
         main_module.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient()
     )
 
-    asyncio.run(main_module._probe_ocr_runtime())
+    asyncio.run(main_module._probe_remote_ocr_runtime())
 
     assert calls == [
         (
@@ -344,7 +345,7 @@ def test_probe_ocr_runtime_uses_get_and_accepts_missing_job(
     ]
 
 
-def test_probe_ocr_runtime_rejects_server_errors(
+def test_probe_remote_ocr_runtime_rejects_server_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _load_required_env(monkeypatch, SKIP_STARTUP_CHECKS="true")
@@ -370,10 +371,10 @@ def test_probe_ocr_runtime_rejects_server_errors(
     )
 
     with pytest.raises(RuntimeError):
-        asyncio.run(main_module._probe_ocr_runtime())
+        asyncio.run(main_module._probe_remote_ocr_runtime())
 
 
-def test_probe_ocr_runtime_uses_local_runtime_probe_when_local_mode(
+def test_probe_local_ocr_runtime_uses_local_runtime_probe_when_local_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _load_required_env(
@@ -394,6 +395,23 @@ def test_probe_ocr_runtime_uses_local_runtime_probe_when_local_mode(
         fake_ensure_local_runtime_available,
     )
 
-    asyncio.run(main_module._probe_ocr_runtime())
+    result = asyncio.run(main_module._probe_local_ocr_runtime())
 
+    assert result is None
     assert calls == ["auto"]
+
+
+def test_probe_ocr_runtime_returns_disabled_for_skipped_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _load_required_env(
+        monkeypatch,
+        SKIP_STARTUP_CHECKS="true",
+        PADDLEOCR_MODE="remote",
+        HEALTH_CHECK_EXTERNAL="false",
+    )
+    main_module = importlib.import_module("app.main")
+    main_module = importlib.reload(main_module)
+
+    assert asyncio.run(main_module._probe_local_ocr_runtime()) == "disabled"
+    assert asyncio.run(main_module._probe_remote_ocr_runtime()) == "disabled"

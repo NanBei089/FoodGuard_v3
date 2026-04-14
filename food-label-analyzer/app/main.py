@@ -132,7 +132,9 @@ async def _run_startup_checks() -> None:
 
 async def _run_with_timeout(check_name: str, probe) -> str:
     try:
-        await asyncio.wait_for(probe(), timeout=HEALTH_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(probe(), timeout=HEALTH_TIMEOUT_SECONDS)
+        if result in {"up", "down", "disabled"}:
+            return result
         return "up"
     except Exception as exc:
         logger.warning("health_probe_failed", service=check_name, error=str(exc))
@@ -181,18 +183,24 @@ async def _probe_ollama_embedding() -> None:
         response.raise_for_status()
 
 
-async def _probe_ocr_runtime() -> None:
+async def _probe_local_ocr_runtime() -> str | None:
     current_settings = get_settings()
-    if current_settings.PADDLEOCR_MODE == "local":
-        from app.workers.ocr.local_engine import ensure_local_runtime_available
+    if current_settings.PADDLEOCR_MODE != "local":
+        return "disabled"
 
-        await asyncio.to_thread(
-            ensure_local_runtime_available, current_settings.PADDLEOCR_DEVICE
-        )
-        return
+    from app.workers.ocr.local_engine import ensure_local_runtime_available
 
+    await asyncio.to_thread(
+        ensure_local_runtime_available, current_settings.PADDLEOCR_DEVICE
+    )
+    return None
+
+
+async def _probe_remote_ocr_runtime() -> str | None:
+    current_settings = get_settings()
     if not current_settings.HEALTH_CHECK_EXTERNAL:
-        return
+        return "disabled"
+
     headers: dict[str, str] = {}
     token = current_settings.PADDLEOCR_TOKEN.get_secret_value()
     if token:
@@ -221,11 +229,16 @@ async def _build_health_payload() -> HealthCheckResponse:
         ollama_embedding=await _run_with_timeout(
             "ollama_embedding", _probe_ollama_embedding
         ),
-        ocr_runtime=await _run_with_timeout("ocr_runtime", _probe_ocr_runtime),
+        ocr_local_runtime=await _run_with_timeout(
+            "ocr_local_runtime", _probe_local_ocr_runtime
+        ),
+        ocr_remote_api=await _run_with_timeout(
+            "ocr_remote_api", _probe_remote_ocr_runtime
+        ),
     )
     overall = (
         "healthy"
-        if all(value == "up" for value in services.model_dump().values())
+        if all(value != "down" for value in services.model_dump().values())
         else "degraded"
     )
     return HealthCheckResponse(

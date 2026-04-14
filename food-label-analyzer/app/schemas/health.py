@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.common import BASE_MODEL_CONFIG
 
-ServiceState = Literal["up", "down"]
+ServiceState = Literal["up", "down", "disabled"]
 HealthStatus = Literal["healthy", "degraded"]
 
 
@@ -34,8 +34,11 @@ class HealthServicesSchema(_HealthSchema):
     ollama_embedding: ServiceState = Field(
         description="Ollama embedding service availability", examples=["up"]
     )
-    ocr_runtime: ServiceState = Field(
-        description="OCR runtime connectivity", examples=["up"]
+    ocr_local_runtime: ServiceState = Field(
+        description="Local PaddleOCR runtime availability", examples=["up"]
+    )
+    ocr_remote_api: ServiceState = Field(
+        description="Remote PaddleOCR API availability", examples=["up", "disabled"]
     )
 
 

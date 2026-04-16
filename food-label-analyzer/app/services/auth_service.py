@@ -58,6 +58,74 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _log_cooldown_redis_failure(
+    *,
+    event: str,
+    flow: str,
+    email: str,
+    exc: RedisError,
+) -> None:
+    logger.warning(
+        event,
+        flow=flow,
+        email=email,
+        exception_type=exc.__class__.__name__,
+        exception_message=str(exc),
+    )
+
+
+async def _reserve_cooldown_slot(
+    redis: Redis,
+    key: str,
+    *,
+    flow: str,
+    email: str,
+) -> bool:
+    try:
+        reserved = await redis.set(key, "1", ex=EMAIL_COOLDOWN_SECONDS, nx=True)
+    except RedisError as exc:
+        _log_cooldown_redis_failure(
+            event="auth_cooldown_reserve_failed",
+            flow=flow,
+            email=email,
+            exc=exc,
+        )
+        return False
+
+    if reserved:
+        return True
+
+    try:
+        ttl = await redis.ttl(key)
+    except RedisError as exc:
+        _log_cooldown_redis_failure(
+            event="auth_cooldown_ttl_failed",
+            flow=flow,
+            email=email,
+            exc=exc,
+        )
+        ttl = 0
+    raise CooldownError(max(int(ttl), 0))
+
+
+async def _release_cooldown_slot(
+    redis: Redis,
+    key: str,
+    *,
+    flow: str,
+    email: str,
+) -> None:
+    try:
+        await redis.delete(key)
+    except RedisError as exc:
+        _log_cooldown_redis_failure(
+            event="auth_cooldown_release_failed",
+            flow=flow,
+            email=email,
+            exc=exc,
+        )
+
+
 async def _revoke_all_refresh_tokens_for_user(
     user_id: uuid.UUID, db: AsyncSession
 ) -> None:
@@ -70,6 +138,40 @@ async def _revoke_all_refresh_tokens_for_user(
     now = datetime.now(timezone.utc)
     for token in result.scalars().all():
         token.revoked_at = now
+
+
+async def _expire_active_reset_tokens_for_user(
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    *,
+    exclude_token_id: uuid.UUID | None = None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.is_used.is_(False),
+            PasswordResetToken.expired_at > now,
+        )
+    )
+    for reset_token in result.scalars().all():
+        if exclude_token_id is not None and reset_token.id == exclude_token_id:
+            continue
+        reset_token.is_used = True
+
+
+async def _expire_active_register_codes(email: str, db: AsyncSession) -> None:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(EmailVerification).where(
+            EmailVerification.email == email,
+            EmailVerification.type == VerificationType.REGISTER,
+            EmailVerification.is_used.is_(False),
+            EmailVerification.expired_at > now,
+        )
+    )
+    for verification in result.scalars().all():
+        verification.is_used = True
 
 
 async def _issue_token_response(user: User, db: AsyncSession) -> TokenResponse:
@@ -107,9 +209,13 @@ async def send_register_code(email: str, db: AsyncSession, redis: Redis) -> int:
         raise EmailAlreadyExistsError()
 
     cooldown_key = f"cooldown:register:{normalized_email}"
-    if await redis.exists(cooldown_key):
-        ttl = await redis.ttl(cooldown_key)
-        raise CooldownError(max(ttl, 0))
+    cooldown_reserved = await _reserve_cooldown_slot(
+        redis,
+        cooldown_key,
+        flow="register",
+        email=normalized_email,
+    )
+    await _expire_active_register_codes(normalized_email, db)
 
     verification = EmailVerification(
         email=normalized_email,
@@ -120,16 +226,17 @@ async def send_register_code(email: str, db: AsyncSession, redis: Redis) -> int:
     )
     db.add(verification)
     await db.flush()
-    await send_verification_email(normalized_email, verification.code)
     try:
-        await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
-    except RedisError as exc:
-        logger.warning(
-            "register_cooldown_set_failed",
-            email=normalized_email,
-            exception_type=exc.__class__.__name__,
-            exception_message=str(exc),
-        )
+        await send_verification_email(normalized_email, verification.code)
+    except Exception:
+        if cooldown_reserved:
+            await _release_cooldown_slot(
+                redis,
+                cooldown_key,
+                flow="register",
+                email=normalized_email,
+            )
+        raise
     return EMAIL_COOLDOWN_SECONDS
 
 
@@ -224,11 +331,20 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession) -> TokenResponse:
     except (TypeError, ValueError) as exc:
         raise TokenInvalidError() from exc
 
+    now = datetime.now(timezone.utc)
     token_result = await db.execute(
-        select(RefreshToken).where(RefreshToken.jti == str(refresh_jti))
+        select(RefreshToken).where(
+            RefreshToken.jti == str(refresh_jti),
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > now,
+        )
     )
     token_record = token_result.scalar_one_or_none()
-    if token_record is None or token_record.revoked_at is not None:
+    if (
+        token_record is None
+        or token_record.revoked_at is not None
+        or token_record.expires_at <= now
+    ):
         raise TokenInvalidError()
 
     result = await db.execute(
@@ -246,15 +362,19 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession) -> TokenResponse:
 async def send_reset_email(email: str, db: AsyncSession, redis: Redis) -> None:
     normalized_email = _normalize_email(email)
     cooldown_key = f"cooldown:reset:{normalized_email}"
-    if await redis.exists(cooldown_key):
-        ttl = await redis.ttl(cooldown_key)
-        raise CooldownError(max(ttl, 0))
+    await _reserve_cooldown_slot(
+        redis,
+        cooldown_key,
+        flow="reset",
+        email=normalized_email,
+    )
 
     result = await db.execute(
         select(User).where(User.email == normalized_email, User.is_active.is_(True))
     )
     user = result.scalar_one_or_none()
     if user is not None:
+        await _expire_active_reset_tokens_for_user(user.id, db)
         reset_token = PasswordResetToken(
             user_id=user.id,
             token=secrets.token_urlsafe(48),
@@ -272,8 +392,6 @@ async def send_reset_email(email: str, db: AsyncSession, redis: Redis) -> None:
                 exception_type=exc.__class__.__name__,
                 exception_message=str(exc),
             )
-
-    await redis.set(cooldown_key, "1", ex=EMAIL_COOLDOWN_SECONDS)
 
 
 async def reset_password(token: str, new_password: str, db: AsyncSession) -> None:
@@ -298,6 +416,11 @@ async def reset_password(token: str, new_password: str, db: AsyncSession) -> Non
 
     user.password_hash = hash_password(new_password)
     reset_token.is_used = True
+    await _expire_active_reset_tokens_for_user(
+        user.id,
+        db,
+        exclude_token_id=reset_token.id,
+    )
     await _revoke_all_refresh_tokens_for_user(user.id, db)
     await db.flush()
 

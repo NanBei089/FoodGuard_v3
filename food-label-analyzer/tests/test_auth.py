@@ -82,9 +82,14 @@ def test_send_register_code_persists_verification_and_sets_cooldown(
     fake_db = AsyncMock()
     fake_db.add = Mock()
     fake_db.flush = AsyncMock()
-    fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(None),
+            _ScalarResult([]),
+        ]
+    )
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = False
+    fake_redis.set.return_value = True
     fake_send_email = AsyncMock()
     monkeypatch.setattr(service_module, "send_verification_email", fake_send_email)
 
@@ -100,8 +105,46 @@ def test_send_register_code_persists_verification_and_sets_cooldown(
     assert verification.type == VerificationType.REGISTER
     fake_send_email.assert_awaited_once_with("user@example.com", verification.code)
     fake_redis.set.assert_awaited_once_with(
-        "cooldown:register:user@example.com", "1", ex=60
+        "cooldown:register:user@example.com", "1", ex=60, nx=True
     )
+    fake_redis.delete.assert_not_awaited()
+
+
+def test_send_register_code_expires_previous_active_codes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+    old_code = EmailVerification(
+        email="user@example.com",
+        code="111111",
+        type=VerificationType.REGISTER,
+        expired_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(None),
+            _ScalarResult([old_code]),
+        ]
+    )
+    fake_redis = AsyncMock()
+    fake_redis.set.return_value = True
+    monkeypatch.setattr(service_module, "send_verification_email", AsyncMock())
+
+    asyncio.run(
+        service_module.send_register_code("User@Example.com", fake_db, fake_redis)
+    )
+
+    assert old_code.is_used is True
+    new_code = fake_db.add.call_args.args[0]
+    assert isinstance(new_code, EmailVerification)
+    assert new_code is not old_code
 
 
 def test_send_register_code_propagates_email_delivery_failure(
@@ -115,9 +158,14 @@ def test_send_register_code_propagates_email_delivery_failure(
     fake_db = AsyncMock()
     fake_db.add = Mock()
     fake_db.flush = AsyncMock()
-    fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(None),
+            _ScalarResult([]),
+        ]
+    )
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = False
+    fake_redis.set.return_value = True
     monkeypatch.setattr(
         service_module,
         "send_verification_email",
@@ -129,7 +177,10 @@ def test_send_register_code_propagates_email_delivery_failure(
             service_module.send_register_code("User@Example.com", fake_db, fake_redis)
         )
 
-    fake_redis.set.assert_not_awaited()
+    fake_redis.set.assert_awaited_once_with(
+        "cooldown:register:user@example.com", "1", ex=60, nx=True
+    )
+    fake_redis.delete.assert_awaited_once_with("cooldown:register:user@example.com")
 
 
 def test_send_register_code_tolerates_cooldown_write_failure(
@@ -143,9 +194,13 @@ def test_send_register_code_tolerates_cooldown_write_failure(
     fake_db = AsyncMock()
     fake_db.add = Mock()
     fake_db.flush = AsyncMock()
-    fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(None),
+            _ScalarResult([]),
+        ]
+    )
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = False
     fake_redis.set.side_effect = RedisConnectionError("redis down")
     fake_send_email = AsyncMock()
     monkeypatch.setattr(service_module, "send_verification_email", fake_send_email)
@@ -157,8 +212,9 @@ def test_send_register_code_tolerates_cooldown_write_failure(
     assert cooldown == 60
     fake_send_email.assert_awaited_once()
     fake_redis.set.assert_awaited_once_with(
-        "cooldown:register:user@example.com", "1", ex=60
+        "cooldown:register:user@example.com", "1", ex=60, nx=True
     )
+    fake_redis.delete.assert_not_awaited()
 
 
 def test_send_register_code_enforces_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,10 +224,12 @@ def test_send_register_code_enforces_cooldown(monkeypatch: pytest.MonkeyPatch) -
     )
 
     fake_db = AsyncMock()
+    fake_db.add = Mock()
     fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = True
+    fake_redis.set.return_value = False
     fake_redis.ttl.return_value = 42
+    monkeypatch.setattr(service_module, "send_verification_email", AsyncMock())
 
     with pytest.raises(CooldownError) as exc_info:
         asyncio.run(
@@ -179,6 +237,9 @@ def test_send_register_code_enforces_cooldown(monkeypatch: pytest.MonkeyPatch) -
         )
 
     assert exc_info.value.detail == {"retry_after_seconds": 42}
+    fake_redis.set.assert_awaited_once_with(
+        "cooldown:register:user@example.com", "1", ex=60, nx=True
+    )
 
 
 def test_register_user_marks_verification_used_and_creates_user(
@@ -314,6 +375,36 @@ def test_refresh_tokens_rejects_non_refresh_token(
         asyncio.run(service_module.refresh_tokens("bad-token", AsyncMock()))
 
 
+def test_refresh_tokens_rejects_expired_database_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+    user_id = uuid.uuid4()
+    expired_record = SimpleNamespace(
+        jti="refresh-jti",
+        user_id=user_id,
+        revoked_at=None,
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    fake_db = AsyncMock()
+    fake_db.execute = AsyncMock(return_value=_ScalarResult(expired_record))
+    monkeypatch.setattr(
+        service_module,
+        "decode_token",
+        lambda token: {
+            "sub": str(user_id),
+            "type": "refresh",
+            "jti": "refresh-jti",
+        },
+    )
+
+    with pytest.raises(TokenInvalidError):
+        asyncio.run(service_module.refresh_tokens("expired-refresh-token", fake_db))
+
+
 def test_send_reset_email_does_not_enumerate_unknown_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -327,7 +418,7 @@ def test_send_reset_email_does_not_enumerate_unknown_users(
     fake_db.flush = AsyncMock()
     fake_db.execute = AsyncMock(return_value=_ScalarResult(None))
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = False
+    fake_redis.set.return_value = True
 
     asyncio.run(
         service_module.send_reset_email("missing@example.com", fake_db, fake_redis)
@@ -335,7 +426,7 @@ def test_send_reset_email_does_not_enumerate_unknown_users(
 
     fake_db.add.assert_not_called()
     fake_redis.set.assert_awaited_once_with(
-        "cooldown:reset:missing@example.com", "1", ex=60
+        "cooldown:reset:missing@example.com", "1", ex=60, nx=True
     )
 
 
@@ -358,9 +449,14 @@ def test_send_reset_email_swallows_delivery_failures_for_existing_user(
     fake_db = AsyncMock()
     fake_db.add = Mock()
     fake_db.flush = AsyncMock()
-    fake_db.execute = AsyncMock(return_value=_ScalarResult(user))
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(user),
+            _ScalarResult([]),
+        ]
+    )
     fake_redis = AsyncMock()
-    fake_redis.exists.return_value = False
+    fake_redis.set.return_value = True
     monkeypatch.setattr(
         service_module,
         "dispatch_reset_email",
@@ -373,7 +469,63 @@ def test_send_reset_email_swallows_delivery_failures_for_existing_user(
 
     fake_db.add.assert_called_once()
     fake_redis.set.assert_awaited_once_with(
-        "cooldown:reset:user@example.com", "1", ex=60
+        "cooldown:reset:user@example.com", "1", ex=60, nx=True
+    )
+    fake_redis.delete.assert_not_awaited()
+
+
+def test_send_reset_email_expires_previous_active_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+
+    user = User(
+        email="user@example.com",
+        password_hash="hashed",
+        is_verified=True,
+        is_active=True,
+    )
+    user.id = uuid.uuid4()
+    old_token = PasswordResetToken(
+        user_id=user.id,
+        token="old-token",
+        expired_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    another_old_token = PasswordResetToken(
+        user_id=user.id,
+        token="another-old-token",
+        expired_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(user),
+            _ScalarResult([old_token, another_old_token]),
+        ]
+    )
+    fake_redis = AsyncMock()
+    fake_redis.set.return_value = True
+    dispatch_reset_email = AsyncMock()
+    monkeypatch.setattr(service_module, "dispatch_reset_email", dispatch_reset_email)
+
+    asyncio.run(
+        service_module.send_reset_email("user@example.com", fake_db, fake_redis)
+    )
+
+    assert old_token.is_used is True
+    assert another_old_token.is_used is True
+    new_reset_token = fake_db.add.call_args.args[0]
+    assert isinstance(new_reset_token, PasswordResetToken)
+    assert new_reset_token.token not in {old_token.token, another_old_token.token}
+    dispatch_reset_email.assert_awaited_once_with(
+        "user@example.com",
+        new_reset_token.token,
     )
 
 
@@ -404,6 +556,7 @@ def test_reset_password_marks_token_used(monkeypatch: pytest.MonkeyPatch) -> Non
             _ScalarResult(reset_token),
             _ScalarResult(user),
             _ScalarResult([]),
+            _ScalarResult([]),
         ],
     )
 
@@ -411,6 +564,54 @@ def test_reset_password_marks_token_used(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert reset_token.is_used is True
     assert user.password_hash != hash_password("OldPass123")
+
+
+def test_reset_password_expires_other_reset_tokens_and_revokes_refresh_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    service_module = importlib.reload(
+        importlib.import_module("app.services.auth_service")
+    )
+
+    user = User(
+        email="user@example.com",
+        password_hash=hash_password("OldPass123"),
+        is_verified=True,
+        is_active=True,
+    )
+    user.id = uuid.uuid4()
+    reset_token = PasswordResetToken(
+        user_id=user.id,
+        token="reset-token",
+        expired_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    reset_token.id = uuid.uuid4()
+    sibling_token = PasswordResetToken(
+        user_id=user.id,
+        token="sibling-token",
+        expired_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    sibling_token.id = uuid.uuid4()
+    refresh_token = SimpleNamespace(revoked_at=None)
+
+    fake_db = AsyncMock()
+    fake_db.add = Mock()
+    fake_db.flush = AsyncMock()
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(reset_token),
+            _ScalarResult(user),
+            _ScalarResult([reset_token, sibling_token]),
+            _ScalarResult([refresh_token]),
+        ],
+    )
+
+    asyncio.run(service_module.reset_password("reset-token", "StrongPass123", fake_db))
+
+    assert reset_token.is_used is True
+    assert sibling_token.is_used is True
+    assert refresh_token.revoked_at is not None
 
 
 def test_logout_user_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ExternalServiceException
+from app.core.errors import ExternalServiceException, TooManyConcurrentTasksError
 from app.db.session import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
@@ -13,8 +13,7 @@ from app.schemas.analysis import TaskCreateResponse, TaskStatusResponse
 from app.schemas.common import ApiResponse, success_response
 from app.services.storage_service import get_storage_service
 from app.services.task_service import (
-    check_concurrent_limit,
-    create_task,
+    create_task_with_limit_guard,
     get_task_status_payload,
     get_task_with_permission,
     update_celery_task_id,
@@ -45,21 +44,33 @@ async def upload_image(
 ) -> ApiResponse[TaskCreateResponse]:
     storage_service = get_storage_service()
     file_bytes, content_type = await validate_file(file)
-    await check_concurrent_limit(current_user.id, db)
     image_key, image_url = await storage_service.upload_image(
         file_bytes,
         str(current_user.id),
         content_type,
     )
-    task = await create_task(current_user.id, image_key, image_url, db)
 
     try:
-        celery_result = celery_app.send_task(
+        task = await create_task_with_limit_guard(
+            current_user.id,
+            image_key,
+            image_url,
+            db,
+        )
+        celery_task_id = f"analysis:{task.id}"
+        celery_app.send_task(
             "analysis.process_image",
             args=[str(task.id), image_key, str(current_user.id)],
             queue="analysis",
+            task_id=celery_task_id,
         )
-        await update_celery_task_id(task.id, celery_result.id, db)
+        await update_celery_task_id(task.id, celery_task_id, db)
+    except TooManyConcurrentTasksError:
+        try:
+            await storage_service.delete_image(image_key)
+        except Exception:
+            pass
+        raise
     except Exception as exc:
         try:
             await storage_service.delete_image(image_key)

@@ -6,12 +6,13 @@ import io
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy.dialects import postgresql
 from starlette.datastructures import UploadFile
 
 from app.core.error_handlers import register_exception_handlers
@@ -47,6 +48,17 @@ class _ScalarsResult:
         return SimpleNamespace(all=lambda: self._items)
 
 
+class _SyncDbContext:
+    def __init__(self, db):
+        self._db = db
+
+    def __enter__(self):
+        return self._db
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
 def _png_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (4, 4), color=(255, 0, 0)).save(buffer, format="PNG")
@@ -76,6 +88,16 @@ def _health_advice_payload() -> list[dict[str, str]]:
         }
         for group in sorted(SUPPORTED_HEALTH_ADVICE_GROUPS)
     ]
+
+
+def _llm_output_payload(score: int = 88) -> dict[str, object]:
+    return {
+        "score": score,
+        "summary": "S" * 60,
+        "top_risks": ["salt"],
+        "ingredients": [],
+        "health_advice": _health_advice_payload(),
+    }
 
 
 def test_validate_file_accepts_png_and_rejects_invalid_payload(
@@ -111,16 +133,60 @@ def test_validate_file_rejects_large_payload(monkeypatch: pytest.MonkeyPatch) ->
         )
 
 
-def test_check_concurrent_limit_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_file_accepts_limit_boundary_and_rejects_one_byte_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    task_service_module = importlib.reload(
+        importlib.import_module("app.services.task_service")
+    )
+    payload = _png_bytes()
+    monkeypatch.setattr(
+        task_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            max_upload_size_bytes=len(payload),
+            MAX_UPLOAD_SIZE_MB=1,
+            allowed_image_types_list=["image/png"],
+        ),
+    )
+
+    accepted_payload, content_type = asyncio.run(
+        task_service_module.validate_file(_upload_file("tiny.png", payload))
+    )
+    assert accepted_payload == payload
+    assert content_type == "image/png"
+
+    with pytest.raises(FileTooLargeError):
+        asyncio.run(
+            task_service_module.validate_file(
+                _upload_file("tiny.png", payload + b"x")
+            )
+        )
+
+
+def test_create_task_with_limit_guard_raises_when_limit_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     load_required_env(monkeypatch)
     task_service_module = importlib.reload(
         importlib.import_module("app.services.task_service")
     )
     fake_db = AsyncMock()
-    fake_db.execute = AsyncMock(return_value=_ScalarResult(3))
+    fake_db.add = AsyncMock()
+    fake_db.execute = AsyncMock(side_effect=[None, _ScalarResult(3)])
 
     with pytest.raises(TooManyConcurrentTasksError):
-        asyncio.run(task_service_module.check_concurrent_limit(uuid.uuid4(), fake_db))
+        asyncio.run(
+            task_service_module.create_task_with_limit_guard(
+                uuid.uuid4(),
+                "uploads/key.png",
+                "https://example.com/key.png",
+                fake_db,
+            )
+        )
+
+    fake_db.add.assert_not_called()
 
 
 def test_get_task_status_payload_includes_report_metadata(
@@ -191,15 +257,16 @@ def test_analysis_upload_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         api_module, "validate_file", AsyncMock(return_value=(b"img", "image/png"))
     )
-    monkeypatch.setattr(api_module, "check_concurrent_limit", AsyncMock())
     monkeypatch.setattr(api_module, "get_storage_service", lambda: storage)
-    monkeypatch.setattr(api_module, "create_task", AsyncMock(return_value=fake_task))
-    monkeypatch.setattr(api_module, "update_celery_task_id", AsyncMock())
     monkeypatch.setattr(
-        api_module.celery_app,
-        "send_task",
-        lambda *args, **kwargs: SimpleNamespace(id="celery-1"),
+        api_module,
+        "create_task_with_limit_guard",
+        AsyncMock(return_value=fake_task),
     )
+    update_celery_task_id = AsyncMock()
+    send_task = Mock(return_value=SimpleNamespace(id="broker-generated-id"))
+    monkeypatch.setattr(api_module, "update_celery_task_id", update_celery_task_id)
+    monkeypatch.setattr(api_module.celery_app, "send_task", send_task)
 
     with TestClient(app) as client:
         response = client.post(
@@ -211,6 +278,18 @@ def test_analysis_upload_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = response.json()
     assert payload["data"]["task_id"] == str(fake_task.id)
     assert payload["data"]["status"] == "queued"
+    expected_celery_task_id = f"analysis:{fake_task.id}"
+    send_task.assert_called_once_with(
+        "analysis.process_image",
+        args=[str(fake_task.id), "uploads/key.png", str(current_user.id)],
+        queue="analysis",
+        task_id=expected_celery_task_id,
+    )
+    update_celery_task_id.assert_awaited_once_with(
+        fake_task.id,
+        expected_celery_task_id,
+        fake_db,
+    )
 
 
 def test_analysis_upload_route_rolls_back_when_enqueue_fails(
@@ -249,9 +328,12 @@ def test_analysis_upload_route_rolls_back_when_enqueue_fails(
     monkeypatch.setattr(
         api_module, "validate_file", AsyncMock(return_value=(b"img", "image/png"))
     )
-    monkeypatch.setattr(api_module, "check_concurrent_limit", AsyncMock())
     monkeypatch.setattr(api_module, "get_storage_service", lambda: storage)
-    monkeypatch.setattr(api_module, "create_task", AsyncMock(return_value=fake_task))
+    monkeypatch.setattr(
+        api_module,
+        "create_task_with_limit_guard",
+        AsyncMock(return_value=fake_task),
+    )
     monkeypatch.setattr(
         api_module.celery_app,
         "send_task",
@@ -267,6 +349,251 @@ def test_analysis_upload_route_rolls_back_when_enqueue_fails(
     assert response.status_code == 503
     fake_db.rollback.assert_not_awaited()
     storage.delete_image.assert_awaited_once_with("uploads/key.png")
+
+
+def test_analysis_upload_route_deletes_upload_when_limit_guard_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, api_module = _build_analysis_app(monkeypatch)
+    fake_db = AsyncMock()
+    current_user = User(
+        email="user@example.com",
+        password_hash="hashed",
+        is_verified=True,
+        is_active=True,
+    )
+    current_user.id = uuid.uuid4()
+    storage = SimpleNamespace(
+        upload_image=AsyncMock(
+            return_value=("uploads/key.png", "https://example.com/key.png")
+        ),
+        delete_image=AsyncMock(),
+    )
+
+    async def override_db():
+        yield fake_db
+
+    async def override_user():
+        return current_user
+
+    app.dependency_overrides[api_module.get_db] = override_db
+    app.dependency_overrides[api_module.get_current_user] = override_user
+    monkeypatch.setattr(
+        api_module, "validate_file", AsyncMock(return_value=(b"img", "image/png"))
+    )
+    monkeypatch.setattr(api_module, "get_storage_service", lambda: storage)
+    monkeypatch.setattr(
+        api_module,
+        "create_task_with_limit_guard",
+        AsyncMock(side_effect=TooManyConcurrentTasksError()),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/upload",
+            files={"file": ("tiny.png", _png_bytes(), "image/png")},
+        )
+
+    assert response.status_code == 429
+    storage.delete_image.assert_awaited_once_with("uploads/key.png")
+
+
+def test_update_task_status_uses_mutable_status_cas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    persistence_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis.persistence")
+    )
+    fake_db = Mock()
+    fake_db.execute.return_value = SimpleNamespace(rowcount=1)
+    monkeypatch.setattr(
+        persistence_module,
+        "get_sync_db",
+        lambda: _SyncDbContext(fake_db),
+    )
+
+    persistence_module._update_task_status(
+        str(uuid.uuid4()),
+        TaskStatus.PROCESSING,
+    )
+
+    statement = fake_db.execute.call_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "analysis_tasks.status IN" in compiled
+    assert "analysis_tasks.id" in compiled
+
+
+def test_update_task_status_skips_terminal_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    persistence_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis.persistence")
+    )
+    fake_db = Mock()
+    fake_db.execute.return_value = SimpleNamespace(rowcount=0)
+    logger = SimpleNamespace(info=Mock())
+    monkeypatch.setattr(
+        persistence_module,
+        "get_sync_db",
+        lambda: _SyncDbContext(fake_db),
+    )
+    monkeypatch.setattr(persistence_module, "logger", logger)
+
+    persistence_module._update_task_status(
+        str(uuid.uuid4()),
+        TaskStatus.FAILED,
+        "late failure",
+    )
+
+    logger.info.assert_called_once()
+    assert logger.info.call_args.args[0] == "analysis_task_status_update_skipped"
+
+
+def test_complete_task_with_report_is_idempotent_when_already_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    persistence_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis.persistence")
+    )
+    task_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    task = AnalysisTask(
+        user_id=user_id,
+        image_key="uploads/key.png",
+        image_url="https://example.com/key.png",
+        status=TaskStatus.COMPLETED,
+    )
+    task.id = task_id
+    report = Report(
+        task_id=task_id,
+        user_id=user_id,
+        ingredients_text="old",
+        nutrition_json=None,
+        rag_results_json=None,
+        llm_output_json=_llm_output_payload(score=70),
+        score=70,
+    )
+    report.id = uuid.uuid4()
+    fake_db = Mock()
+    fake_db.add = Mock()
+    fake_db.execute.side_effect = [_ScalarResult(task), _ScalarResult(report)]
+    logger = SimpleNamespace(info=Mock())
+    monkeypatch.setattr(
+        persistence_module,
+        "get_sync_db",
+        lambda: _SyncDbContext(fake_db),
+    )
+    monkeypatch.setattr(persistence_module, "logger", logger)
+
+    persistence_module._complete_task_with_report(
+        task_id=str(task_id),
+        user_id=str(user_id),
+        ingredients_text="new",
+        nutrition_json=None,
+        rag_results_json=None,
+        llm_output_json=_llm_output_payload(score=88),
+        score=88,
+    )
+
+    first_statement = fake_db.execute.call_args_list[0].args[0]
+    assert "FOR UPDATE" in str(first_statement.compile(dialect=postgresql.dialect()))
+    fake_db.add.assert_not_called()
+    assert report.ingredients_text == "old"
+    assert report.score == 70
+    logger.info.assert_called_once()
+    assert logger.info.call_args.args[0] == "analysis_task_completion_skipped_completed"
+
+
+def test_complete_task_with_report_does_not_overwrite_failed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    persistence_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis.persistence")
+    )
+    task_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    task = AnalysisTask(
+        user_id=user_id,
+        image_key="uploads/key.png",
+        image_url="https://example.com/key.png",
+        status=TaskStatus.FAILED,
+    )
+    task.id = task_id
+    fake_db = Mock()
+    fake_db.add = Mock()
+    fake_db.execute.side_effect = [_ScalarResult(task), _ScalarResult(None)]
+    logger = SimpleNamespace(info=Mock())
+    monkeypatch.setattr(
+        persistence_module,
+        "get_sync_db",
+        lambda: _SyncDbContext(fake_db),
+    )
+    monkeypatch.setattr(persistence_module, "logger", logger)
+
+    persistence_module._complete_task_with_report(
+        task_id=str(task_id),
+        user_id=str(user_id),
+        ingredients_text="new",
+        nutrition_json=None,
+        rag_results_json=None,
+        llm_output_json=_llm_output_payload(),
+        score=88,
+    )
+
+    fake_db.add.assert_not_called()
+    assert task.status == TaskStatus.FAILED
+    logger.info.assert_called_once()
+    assert logger.info.call_args.args[0] == "analysis_task_completion_skipped_failed"
+
+
+def test_complete_task_with_report_creates_report_and_completes_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    persistence_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis.persistence")
+    )
+    task_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    task = AnalysisTask(
+        user_id=user_id,
+        image_key="uploads/key.png",
+        image_url="https://example.com/key.png",
+        status=TaskStatus.PROCESSING,
+    )
+    task.id = task_id
+    fake_db = Mock()
+    fake_db.add = Mock()
+    fake_db.execute.side_effect = [_ScalarResult(task), _ScalarResult(None)]
+    monkeypatch.setattr(
+        persistence_module,
+        "get_sync_db",
+        lambda: _SyncDbContext(fake_db),
+    )
+
+    persistence_module._complete_task_with_report(
+        task_id=str(task_id),
+        user_id=str(user_id),
+        ingredients_text="salt",
+        nutrition_json={"items": [], "parse_method": "ocr_text"},
+        rag_results_json=None,
+        llm_output_json=_llm_output_payload(score=88),
+        score=88,
+        artifact_urls={"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+
+    report = fake_db.add.call_args.args[0]
+    assert isinstance(report, Report)
+    assert report.ingredients_text == "salt"
+    assert report.nutrition_parse_source == "ocr_text"
+    assert report.score == 88
+    assert task.status == TaskStatus.COMPLETED
+    assert task.error_message is None
+    assert task.completed_at is not None
 
 
 def test_process_image_task_marks_failed_for_not_implemented(

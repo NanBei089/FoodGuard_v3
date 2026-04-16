@@ -8,7 +8,7 @@ import structlog
 from minio import Minio
 from minio.error import InvalidResponseError, MinioException, S3Error, ServerError
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import get_settings
 from app.core.errors import StorageServiceError
@@ -18,6 +18,7 @@ from app.models.report import Report
 from app.schemas.analysis_data import FoodHealthAnalysisOutput, NutritionData, RAGResults
 
 logger = structlog.get_logger(__name__)
+_MUTABLE_TASK_STATUSES = (TaskStatus.PENDING, TaskStatus.PROCESSING)
 
 
 def _validate_optional_json(
@@ -54,20 +55,38 @@ def _download_image(image_key: str) -> bytes:
             response.close()
             response.release_conn()
 
+
 def _update_task_status(
     task_id: str, status: TaskStatus, error_message: str | None = None
 ) -> None:
     task_uuid = uuid.UUID(task_id)
+    values: dict[str, Any] = {
+        "status": status,
+        "error_message": error_message,
+    }
+    if status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+        values["completed_at"] = datetime.now(timezone.utc)
+    elif status == TaskStatus.PROCESSING:
+        values["completed_at"] = None
+
+    # Sync-only persistence helper used by Celery worker tasks.
     with get_sync_db() as db:
-        task = db.get(AnalysisTask, task_uuid)
-        if task is None:
-            return
-        task.status = status
-        task.error_message = error_message
-        if status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
-            task.completed_at = datetime.now(timezone.utc)
-        elif status == TaskStatus.PROCESSING:
-            task.completed_at = None
+        result = db.execute(
+            update(AnalysisTask)
+            .where(
+                AnalysisTask.id == task_uuid,
+                AnalysisTask.status.in_(_MUTABLE_TASK_STATUSES),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 0:
+            logger.info(
+                "analysis_task_status_update_skipped",
+                task_id=task_id,
+                target_status=status.value,
+            )
+
 
 def _complete_task_with_report(
     task_id: str,
@@ -81,32 +100,55 @@ def _complete_task_with_report(
 ) -> None:
     task_uuid = uuid.UUID(task_id)
     user_uuid = uuid.UUID(user_id)
-    validated_llm_output = FoodHealthAnalysisOutput.model_validate(
-        llm_output_json
-    ).model_dump()
-    validated_nutrition = _validate_optional_json(
-        NutritionData, nutrition_json, "nutrition_json"
-    )
-    validated_rag_results = _validate_optional_json(
-        RAGResults, rag_results_json, "rag_results_json"
-    )
-    parse_source = None
-    nutrition_source_payload = (
-        validated_nutrition if isinstance(validated_nutrition, dict) else nutrition_json
-    )
-    if isinstance(nutrition_source_payload, dict):
-        raw_parse_source = nutrition_source_payload.get("parse_method")
-        parse_source = (
-            str(raw_parse_source) if isinstance(raw_parse_source, str) else None
-        )
 
+    # Sync-only persistence helper used by Celery worker tasks.
     with get_sync_db() as db:
-        task = db.get(AnalysisTask, task_uuid)
+        task_result = db.execute(
+            select(AnalysisTask)
+            .where(AnalysisTask.id == task_uuid)
+            .with_for_update()
+        )
+        task = task_result.scalar_one_or_none()
         if task is None:
             return
 
         result = db.execute(select(Report).where(Report.task_id == task_uuid))
         report = result.scalar_one_or_none()
+        if task.status == TaskStatus.FAILED:
+            logger.info(
+                "analysis_task_completion_skipped_failed",
+                task_id=task_id,
+            )
+            return
+        if task.status == TaskStatus.COMPLETED and report is not None:
+            logger.info(
+                "analysis_task_completion_skipped_completed",
+                task_id=task_id,
+                report_id=str(report.id),
+            )
+            return
+
+        validated_llm_output = FoodHealthAnalysisOutput.model_validate(
+            llm_output_json
+        ).model_dump()
+        validated_nutrition = _validate_optional_json(
+            NutritionData, nutrition_json, "nutrition_json"
+        )
+        validated_rag_results = _validate_optional_json(
+            RAGResults, rag_results_json, "rag_results_json"
+        )
+        parse_source = None
+        nutrition_source_payload = (
+            validated_nutrition
+            if isinstance(validated_nutrition, dict)
+            else nutrition_json
+        )
+        if isinstance(nutrition_source_payload, dict):
+            raw_parse_source = nutrition_source_payload.get("parse_method")
+            parse_source = (
+                str(raw_parse_source) if isinstance(raw_parse_source, str) else None
+            )
+
         if report is None:
             report = Report(
                 task_id=task_uuid,

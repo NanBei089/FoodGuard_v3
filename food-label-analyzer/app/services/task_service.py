@@ -6,7 +6,7 @@ from typing import Literal, cast
 
 from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,6 +26,9 @@ from app.schemas.analysis import (
     to_external_task_status,
 )
 
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+_ADVISORY_LOCK_SQL = text("SELECT pg_advisory_xact_lock(:lock_key)")
+
 
 def _detect_image_type(data: bytes) -> str | None:
     if data[:3] == b"\xff\xd8\xff":
@@ -37,17 +40,36 @@ def _detect_image_type(data: bytes) -> str | None:
     return None
 
 
+def _task_slot_lock_key(user_id: uuid.UUID) -> int:
+    return user_id.int & ((1 << 63) - 1)
+
+
+async def _acquire_task_slot_lock(user_id: uuid.UUID, db: AsyncSession) -> None:
+    await db.execute(_ADVISORY_LOCK_SQL, {"lock_key": _task_slot_lock_key(user_id)})
+
+
 async def validate_file(file: UploadFile) -> tuple[bytes, str]:
     settings = get_settings()
     if file is None or not file.filename:
         raise InvalidFileTypeError("上传文件缺失")
 
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise InvalidFileTypeError("上传文件为空")
-    if len(file_bytes) > settings.max_upload_size_bytes:
-        raise FileTooLargeError(f"上传文件超过 {settings.MAX_UPLOAD_SIZE_MB}MB 限制")
+    file_chunks: list[bytes] = []
+    file_size = 0
 
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+
+        file_size += len(chunk)
+        if file_size > settings.max_upload_size_bytes:
+            raise FileTooLargeError(f"上传文件超过 {settings.MAX_UPLOAD_SIZE_MB}MB 限制")
+        file_chunks.append(chunk)
+
+    if file_size == 0:
+        raise InvalidFileTypeError("上传文件为空")
+
+    file_bytes = b"".join(file_chunks)
     content_type = _detect_image_type(file_bytes)
     if content_type is None or content_type not in settings.allowed_image_types_list:
         raise InvalidFileTypeError("仅支持 JPG、PNG 和 WEBP 图片")
@@ -61,7 +83,9 @@ async def validate_file(file: UploadFile) -> tuple[bytes, str]:
     return file_bytes, content_type
 
 
-async def check_concurrent_limit(user_id: uuid.UUID, db: AsyncSession) -> None:
+async def _assert_concurrent_limit_available(
+    user_id: uuid.UUID, db: AsyncSession
+) -> None:
     settings = get_settings()
     result = await db.execute(
         select(func.count())
@@ -76,7 +100,7 @@ async def check_concurrent_limit(user_id: uuid.UUID, db: AsyncSession) -> None:
         raise TooManyConcurrentTasksError()
 
 
-async def create_task(
+async def _create_task_record(
     user_id: uuid.UUID,
     image_key: str,
     image_url: str,
@@ -91,6 +115,17 @@ async def create_task(
     db.add(task)
     await db.flush()
     return task
+
+
+async def create_task_with_limit_guard(
+    user_id: uuid.UUID,
+    image_key: str,
+    image_url: str,
+    db: AsyncSession,
+) -> AnalysisTask:
+    await _acquire_task_slot_lock(user_id, db)
+    await _assert_concurrent_limit_available(user_id, db)
+    return await _create_task_record(user_id, image_key, image_url, db)
 
 
 async def update_celery_task_id(
@@ -150,8 +185,7 @@ async def get_task_status_payload(
 
 
 __all__ = [
-    "check_concurrent_limit",
-    "create_task",
+    "create_task_with_limit_guard",
     "get_task_status_payload",
     "get_task_with_permission",
     "update_celery_task_id",

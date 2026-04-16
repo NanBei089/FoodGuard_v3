@@ -732,10 +732,10 @@ def test_rag_embed_uses_ollama_api(monkeypatch: pytest.MonkeyPatch) -> None:
 
     class FakeClient:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
+            self.calls: list[tuple[str, dict[str, object], float]] = []
 
-        def post(self, url: str, json: dict[str, object]):
-            self.calls.append((url, json))
+        def post(self, url: str, json: dict[str, object], timeout: float):
+            self.calls.append((url, json, timeout))
             return FakeResponse()
 
     fake_client = FakeClient()
@@ -747,6 +747,53 @@ def test_rag_embed_uses_ollama_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fake_client.calls[0][0].endswith("/api/embed")
     assert fake_client.calls[0][1]["model"]
     assert fake_client.calls[0][1]["input"] == "配料:食盐"
+
+    assert fake_client.calls[0][2] == 30.0
+
+
+def test_rag_chroma_client_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    load_required_env(monkeypatch)
+    rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+    clients: list[SimpleNamespace] = []
+
+    def fake_persistent_client(path: str) -> SimpleNamespace:
+        client = SimpleNamespace(
+            path=path,
+            get_collection=lambda name: SimpleNamespace(name=name),
+        )
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(rag_module.chromadb, "PersistentClient", fake_persistent_client)
+
+    first = rag_module._get_chroma_client()
+    second = rag_module._get_chroma_client()
+
+    assert first is second
+    assert len(clients) == 1
+
+
+def test_rag_collections_are_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    load_required_env(monkeypatch)
+    rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+    collection_calls: list[str] = []
+
+    class FakeClient:
+        def get_collection(self, name: str) -> SimpleNamespace:
+            collection_calls.append(name)
+            return SimpleNamespace(name=name)
+
+    monkeypatch.setattr(rag_module, "_get_chroma_client", lambda: FakeClient())
+    monkeypatch.setattr(rag_module, "_CHROMA_CLIENT_PATH", "test-path")
+
+    ingredients_first = rag_module._get_ingredients_collection()
+    ingredients_second = rag_module._get_ingredients_collection()
+    standards_first = rag_module._get_standards_collection()
+    standards_second = rag_module._get_standards_collection()
+
+    assert ingredients_first is ingredients_second
+    assert standards_first is standards_second
+    assert collection_calls == ["gb2760_a1_grouped"]
 
 
 def test_rag_warmup_raises_when_any_collection_is_unavailable(

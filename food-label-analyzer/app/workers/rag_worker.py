@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any
 
 import chromadb
@@ -14,6 +15,11 @@ from app.core.errors import EmbeddingServiceError
 logger = structlog.get_logger(__name__)
 _HTTP_CLIENT: httpx.Client | None = None
 _http_client_lock = None
+_CHROMA_CLIENT: chromadb.Client | None = None
+_CHROMA_CLIENT_PATH: str | None = None
+_CHROMA_COLLECTIONS: dict[tuple[str, str], chromadb.Collection] = {}
+_chroma_client_lock = threading.Lock()
+_chroma_collection_lock = threading.Lock()
 MAX_RAG_TERMS = 30
 
 
@@ -58,7 +64,11 @@ def _embed(text: str) -> list[float]:
 
     try:
         client = _get_http_client()
-        response = client.post(endpoint, json=payload)
+        response = client.post(
+            endpoint,
+            json=payload,
+            timeout=float(settings.OLLAMA_EMBEDDING_TIMEOUT_S),
+        )
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
@@ -154,21 +164,41 @@ def _match_quality(matches: list[dict[str, Any]]) -> str:
 
 
 def _get_chroma_client() -> chromadb.Client:
+    global _CHROMA_CLIENT, _CHROMA_CLIENT_PATH
     settings = get_settings()
-    chroma_data_path = settings.CHROMADB_PATH
-    return chromadb.PersistentClient(path=str(chroma_data_path))
+    chroma_data_path = str(settings.CHROMADB_PATH)
+    if _CHROMA_CLIENT is None or _CHROMA_CLIENT_PATH != chroma_data_path:
+        with _chroma_client_lock:
+            if _CHROMA_CLIENT is None or _CHROMA_CLIENT_PATH != chroma_data_path:
+                _CHROMA_CLIENT = chromadb.PersistentClient(path=chroma_data_path)
+                _CHROMA_CLIENT_PATH = chroma_data_path
+                _CHROMA_COLLECTIONS.clear()
+    return _CHROMA_CLIENT
+
+
+def _get_cached_collection(name: str) -> chromadb.Collection:
+    client = _get_chroma_client()
+    cache_key = (_CHROMA_CLIENT_PATH or "", name)
+    cached = _CHROMA_COLLECTIONS.get(cache_key)
+    if cached is not None:
+        return cached
+    with _chroma_collection_lock:
+        cached = _CHROMA_COLLECTIONS.get(cache_key)
+        if cached is not None:
+            return cached
+        collection = client.get_collection(name=name)
+        _CHROMA_COLLECTIONS[cache_key] = collection
+        return collection
 
 
 def _get_ingredients_collection() -> chromadb.Collection:
     settings = get_settings()
-    client = _get_chroma_client()
-    return client.get_collection(name=settings.CHROMADB_COLLECTION_INGREDIENTS)
+    return _get_cached_collection(settings.CHROMADB_COLLECTION_INGREDIENTS)
 
 
 def _get_standards_collection() -> chromadb.Collection:
     settings = get_settings()
-    client = _get_chroma_client()
-    return client.get_collection(name=settings.CHROMADB_COLLECTION_STANDARDS)
+    return _get_cached_collection(settings.CHROMADB_COLLECTION_STANDARDS)
 
 
 def warmup() -> None:

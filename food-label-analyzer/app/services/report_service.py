@@ -47,6 +47,7 @@ _PRESIGNED_URL_TIMEOUT_SECONDS = 3.0
 _PRESIGNED_URL_CACHE_TTL_SECONDS = 1800.0
 _PRESIGNED_URL_CACHE_MAXSIZE = 1024
 _PRESIGNED_URL_CACHE: OrderedDict[str, tuple[float, str]] = OrderedDict()
+_PRESIGNED_URL_LOCKS: dict[str, asyncio.Lock] = {}
 
 NUTRIENT_DEFINITIONS: dict[str, dict[str, Any]] = {
     "energy": {
@@ -255,12 +256,17 @@ async def _get_presigned_url_with_cache(object_key: str) -> str:
     cached = _get_cached_presigned_url(object_key)
     if cached is not None:
         return cached
-    signed_url = await asyncio.wait_for(
-        get_storage_service().get_presigned_url(object_key),
-        timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
-    )
-    _store_cached_presigned_url(object_key, signed_url)
-    return signed_url
+    lock = _PRESIGNED_URL_LOCKS.setdefault(object_key, asyncio.Lock())
+    async with lock:
+        cached = _get_cached_presigned_url(object_key)
+        if cached is not None:
+            return cached
+        signed_url = await asyncio.wait_for(
+            get_storage_service().get_presigned_url(object_key),
+            timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+        )
+        _store_cached_presigned_url(object_key, signed_url)
+        return signed_url
 
 
 def _build_message_schema(
@@ -661,12 +667,27 @@ async def get_report_list(
     )
     rows = result.all()
 
-    image_urls = await asyncio.gather(
-        *[_build_image_url(row.image_key, row.image_url) for row in rows]
+    unique_image_inputs: dict[str, tuple[str | None, str | None]] = {}
+    for row in rows:
+        cache_key = row.image_key or f"fallback:{row.image_url or ''}"
+        unique_image_inputs.setdefault(cache_key, (row.image_key, row.image_url))
+
+    resolved_image_urls = dict(
+        zip(
+            unique_image_inputs.keys(),
+            await asyncio.gather(
+                *[
+                    _build_image_url(image_key, image_url)
+                    for image_key, image_url in unique_image_inputs.values()
+                ]
+            ),
+            strict=True,
+        )
     )
 
     items: list[ReportListItemSchema] = []
-    for index, row in enumerate(rows):
+    for row in rows:
+        cache_key = row.image_key or f"fallback:{row.image_url or ''}"
         llm_output = (
             row.llm_output_json if isinstance(row.llm_output_json, dict) else {}
         )
@@ -680,7 +701,7 @@ async def get_report_list(
                     if isinstance(llm_output.get("summary"), str)
                     else None
                 ),
-                image_url=image_urls[index],
+                image_url=resolved_image_urls[cache_key],
                 created_at=row.created_at,
             )
         )

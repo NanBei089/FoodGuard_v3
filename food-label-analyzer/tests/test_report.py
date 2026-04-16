@@ -318,6 +318,116 @@ def test_report_service_returns_empty_page_when_total_is_zero(
     assert report_list.total_pages == 0
 
 
+def test_presigned_url_cache_coalesces_concurrent_same_key_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    report_service_module = importlib.reload(
+        importlib.import_module("app.services.report_service")
+    )
+
+    async def presign(object_key: str) -> str:
+        await asyncio.sleep(0)
+        return f"https://example.com/{object_key}"
+
+    fake_storage = SimpleNamespace(get_presigned_url=AsyncMock(side_effect=presign))
+    monkeypatch.setattr(
+        report_service_module, "get_storage_service", lambda: fake_storage
+    )
+
+    async def run_concurrent_requests() -> list[str]:
+        return await asyncio.gather(
+            *[
+                report_service_module._get_presigned_url_with_cache("same-key")
+                for _ in range(8)
+            ]
+        )
+
+    urls = asyncio.run(run_concurrent_requests())
+
+    assert urls == ["https://example.com/same-key"] * 8
+    fake_storage.get_presigned_url.assert_awaited_once_with("same-key")
+
+
+def test_presigned_url_cache_hit_does_not_create_lock_or_call_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    report_service_module = importlib.reload(
+        importlib.import_module("app.services.report_service")
+    )
+    fake_storage = SimpleNamespace(get_presigned_url=AsyncMock())
+    monkeypatch.setattr(
+        report_service_module, "get_storage_service", lambda: fake_storage
+    )
+    report_service_module._store_cached_presigned_url(
+        "cached-key",
+        "https://example.com/cached-key",
+    )
+
+    url = asyncio.run(
+        report_service_module._get_presigned_url_with_cache("cached-key")
+    )
+
+    assert url == "https://example.com/cached-key"
+    assert "cached-key" not in report_service_module._PRESIGNED_URL_LOCKS
+    fake_storage.get_presigned_url.assert_not_awaited()
+
+
+def test_report_list_deduplicates_same_image_key_presign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    report_service_module = importlib.reload(
+        importlib.import_module("app.services.report_service")
+    )
+    user_id = uuid.uuid4()
+    created_at = datetime.now(timezone.utc)
+    rows = [
+        SimpleNamespace(
+            report_id=uuid.uuid4(),
+            task_id=uuid.uuid4(),
+            score=80,
+            llm_output_json={"summary": "S" * 60},
+            created_at=created_at,
+            image_key="uploads/shared.png",
+            image_url="https://example.com/original-1.png",
+        ),
+        SimpleNamespace(
+            report_id=uuid.uuid4(),
+            task_id=uuid.uuid4(),
+            score=75,
+            llm_output_json={"summary": "T" * 60},
+            created_at=created_at,
+            image_key="uploads/shared.png",
+            image_url="https://example.com/original-2.png",
+        ),
+    ]
+    fake_storage = SimpleNamespace(
+        get_presigned_url=AsyncMock(return_value="https://example.com/shared-signed.png")
+    )
+    monkeypatch.setattr(
+        report_service_module, "get_storage_service", lambda: fake_storage
+    )
+    fake_db = AsyncMock()
+    fake_db.execute = AsyncMock(
+        side_effect=[
+            _ScalarResult(len(rows)),
+            _RowsResult(rows),
+        ]
+    )
+
+    report_list = asyncio.run(
+        report_service_module.get_report_list(user_id, 1, 10, fake_db)
+    )
+
+    assert [item.image_url for item in report_list.items] == [
+        "https://example.com/shared-signed.png",
+        "https://example.com/shared-signed.png",
+    ]
+    fake_storage.get_presigned_url.assert_awaited_once_with("uploads/shared.png")
+
+
 def test_report_service_resolves_artifact_keys_to_signed_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

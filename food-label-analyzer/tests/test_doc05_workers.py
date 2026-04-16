@@ -75,6 +75,27 @@ def _valid_llm_payload() -> dict[str, object]:
     }
 
 
+def _llm_stream(content: str):
+    return [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=content),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=""),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    ]
+
+
 class _FakeInput:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -403,6 +424,35 @@ def test_ocr_parallel_uses_full_and_cropped_inputs(
     assert result.full_text.raw_text == "配料：盐"
     assert result.nutrition_table.table_json is not None
     assert result.nutrition_table.ocr_fallback_text == "能量 100kJ 1%"
+
+
+def test_ocr_runtime_failure_logs_input_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
+    logs: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ocr_module,
+        "_recognize_parallel_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    monkeypatch.setattr(
+        ocr_module.logger,
+        "exception",
+        lambda event, **kwargs: logs.append((event, kwargs)),
+    )
+
+    with pytest.raises(OCRServiceError):
+        ocr_module.recognize_parallel(b"full-image", b"crop")
+
+    assert logs[0][0] == "ocr_runtime_failed"
+    assert logs[0][1]["operation"] == "parallel"
+    assert logs[0][1]["error_type"] == "RuntimeError"
+    assert logs[0][1]["full_text_image_bytes"] == len(b"full-image")
+    assert logs[0][1]["nutrition_image_bytes"] == len(b"crop")
+    assert logs[0][1]["shared_input"] is False
 
 
 def test_ocr_download_jsonl_results_retries_transient_404(
@@ -1068,29 +1118,70 @@ def test_rag_retrieve_all_batches_multiple_terms(
     ]
 
 
+def test_rag_retrieve_all_dedupes_and_reranks_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+    monkeypatch.setattr(rag_module, "_embed_batch", lambda texts: [[0.1, 0.2]])
+
+    class FakeCollection:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def query(self, query_embeddings, n_results, include):
+            if self.label == "ingredients":
+                return {
+                    "ids": [["dup", "low"]],
+                    "documents": [["duplicate low", "low"]],
+                    "metadatas": [[{"term": "dup"}, {"term": "low"}]],
+                    "distances": [[0.6, 0.5]],
+                }
+            return {
+                "ids": [["dup", "high"]],
+                "documents": [["duplicate high", "high"]],
+                "metadatas": [[{"term": "dup"}, {"term": "high"}]],
+                "distances": [[0.05, 0.1]],
+            }
+
+    monkeypatch.setattr(
+        rag_module,
+        "_get_ingredients_collection",
+        lambda: FakeCollection("ingredients"),
+    )
+    monkeypatch.setattr(
+        rag_module,
+        "_get_standards_collection",
+        lambda: FakeCollection("standards"),
+    )
+
+    result = rag_module.retrieve_all(["dup"], "dup")
+    matches = result["retrieval_results"][0]["matches"]
+
+    assert [match["id"] for match in matches] == ["dup", "high", "low"]
+    assert matches[0]["similarity_score"] == pytest.approx(0.95)
+    assert result["retrieval_results"][0]["match_quality"] == "high"
+
+
 def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     load_required_env(monkeypatch)
     llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
     payload = _valid_llm_payload()
     captured_messages: list[dict[str, str]] = []
-    response = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False))
-            )
-        ]
-    )
+    captured_stream_flags: list[bool] = []
+
+    def fake_create(**kwargs):
+        captured_stream_flags.append(bool(kwargs.get("stream")))
+        captured_messages.extend(kwargs.get("messages", []))
+        return _llm_stream(json.dumps(payload, ensure_ascii=False))
+
     monkeypatch.setattr(
         llm_module,
         "_get_client",
         lambda: SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=lambda **kwargs: (
-                        captured_messages.extend(kwargs.get("messages", [])) or response
-                    )
-                )
+                completions=SimpleNamespace(create=fake_create)
             )
         ),
     )
@@ -1101,6 +1192,7 @@ def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) 
 
     assert result["score"] == 86
     assert len(result["health_advice"]) == 5
+    assert captured_stream_flags == [True]
 
 
 def test_llm_analyze_includes_recognized_ingredient_terms_in_prompt(
@@ -1111,23 +1203,17 @@ def test_llm_analyze_includes_recognized_ingredient_terms_in_prompt(
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
     payload = _valid_llm_payload()
     captured_messages: list[dict[str, str]] = []
-    response = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False))
-            )
-        ]
-    )
+
+    def fake_create(**kwargs):
+        captured_messages.extend(kwargs.get("messages", []))
+        return _llm_stream(json.dumps(payload, ensure_ascii=False))
+
     monkeypatch.setattr(
         llm_module,
         "_get_client",
         lambda: SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    create=lambda **kwargs: (
-                        captured_messages.extend(kwargs.get("messages", [])) or response
-                    )
-                )
+                completions=SimpleNamespace(create=fake_create)
             )
         ),
     )
@@ -1151,20 +1237,8 @@ def test_llm_analyze_repairs_invalid_output(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
     responses = iter(
         [
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(message=SimpleNamespace(content='{"score": 1}'))
-                ]
-            ),
-            SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content=json.dumps(_valid_llm_payload(), ensure_ascii=False)
-                        )
-                    )
-                ]
-            ),
+            _llm_stream('{"score": 1}'),
+            _llm_stream(json.dumps(_valid_llm_payload(), ensure_ascii=False)),
         ]
     )
     monkeypatch.setattr(
@@ -1190,15 +1264,14 @@ def test_llm_analyze_raises_when_repair_exhausted(
     load_required_env(monkeypatch, DEEPSEEK_MAX_RETRIES="1")
     llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
-    bad_response = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content='{"score": 1}'))]
-    )
     monkeypatch.setattr(
         llm_module,
         "_get_client",
         lambda: SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(create=lambda **kwargs: bad_response)
+                completions=SimpleNamespace(
+                    create=lambda **kwargs: _llm_stream('{"score": 1}')
+                )
             )
         ),
     )

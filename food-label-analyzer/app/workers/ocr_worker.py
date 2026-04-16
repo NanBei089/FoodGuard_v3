@@ -246,12 +246,15 @@ def _log_and_raise_ocr_runtime_failure(
     operation: str,
     mode: str,
     exc: Exception,
+    context: dict[str, Any] | None = None,
 ) -> None:
     logger.exception(
         "ocr_runtime_failed",
         operation=operation,
         mode=mode,
+        error_type=type(exc).__name__,
         error=str(exc),
+        **(context or {}),
     )
     raise OCRServiceError("OCR runtime failed") from exc
 
@@ -264,6 +267,7 @@ def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
             operation="full_text",
             mode="remote",
             exc=exc,
+            context={"image_bytes": len(image_bytes)},
         )
 
 
@@ -275,6 +279,7 @@ def recognize_nutrition_table(image_bytes: bytes) -> TableRecognitionResult:
             operation="nutrition_table",
             mode="remote",
             exc=exc,
+            context={"image_bytes": len(image_bytes)},
         )
 
 
@@ -292,6 +297,11 @@ def recognize_parallel(
             operation="parallel",
             mode="remote",
             exc=exc,
+            context={
+                "full_text_image_bytes": len(full_text_image_bytes),
+                "nutrition_image_bytes": len(nutrition_image_bytes),
+                "shared_input": full_text_image_bytes is nutrition_image_bytes,
+            },
         )
 
 

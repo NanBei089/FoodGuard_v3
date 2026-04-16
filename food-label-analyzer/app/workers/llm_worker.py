@@ -53,16 +53,6 @@ def _validate_output(payload: dict[str, Any]) -> FoodHealthAnalysisOutput:
     return FoodHealthAnalysisOutput.model_validate(payload)
 
 
-def _extract_message_content(response: Any) -> str:
-    choices = getattr(response, "choices", None)
-    if not choices:
-        raise LLMServiceError("LLM response did not include any choices")
-    content = getattr(choices[0].message, "content", None)
-    if not isinstance(content, str) or not content.strip():
-        raise LLMServiceError("LLM response content is empty")
-    return _extract_json_content(content)
-
-
 def _extract_json_content(content: str) -> str:
     content = content.strip()
     if content.startswith("```json"):
@@ -72,6 +62,66 @@ def _extract_json_content(content: str) -> str:
     if content.endswith("```"):
         content = content[:-3]
     return content.strip()
+
+
+def _extract_stream_delta(chunk: Any) -> tuple[str, str | None]:
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return "", None
+
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    delta = getattr(choice, "delta", None)
+    if delta is None:
+        return "", finish_reason
+
+    content = getattr(delta, "content", None)
+    if isinstance(content, str) and content:
+        return content, finish_reason
+    return "", finish_reason
+
+
+def _collect_stream_content(stream: Any, *, operation: str) -> str:
+    started_at = time.time()
+    first_delta_ms: int | None = None
+    finish_reason: str | None = None
+    chunks: list[str] = []
+
+    try:
+        for chunk in stream:
+            delta, chunk_finish_reason = _extract_stream_delta(chunk)
+            if chunk_finish_reason:
+                finish_reason = str(chunk_finish_reason)
+            if not delta:
+                continue
+            if first_delta_ms is None:
+                first_delta_ms = int((time.time() - started_at) * 1000)
+            chunks.append(delta)
+    except Exception as exc:
+        logger.error(
+            "llm_stream_failed",
+            operation=operation,
+            partial_response=bool(chunks),
+            chunks=len(chunks),
+            chars=sum(len(item) for item in chunks),
+            error=str(exc),
+        )
+        raise LLMServiceError(f"LLM stream failed during {operation}") from exc
+
+    content = "".join(chunks)
+    elapsed_ms = int((time.time() - started_at) * 1000)
+    logger.info(
+        "llm_stream_completed",
+        operation=operation,
+        elapsed_ms=elapsed_ms,
+        first_delta_ms=first_delta_ms,
+        chunks=len(chunks),
+        chars=len(content),
+        finish_reason=finish_reason,
+    )
+    if not content.strip():
+        raise LLMServiceError("LLM response content is empty")
+    return _extract_json_content(content)
 
 
 def _serialize_inputs(
@@ -134,15 +184,16 @@ def analyze(
     content = ""
     logger.info("llm_call_started", model=settings.DEEPSEEK_MODEL)
     try:
-        response = client.chat.completions.create(
+        stream = client.chat.completions.create(
             model=settings.DEEPSEEK_MODEL,
             temperature=settings.DEEPSEEK_TEMPERATURE,
             messages=[
                 {"role": "system", "content": "Return valid JSON only."},
                 {"role": "user", "content": prompt_with_hint.format(**inputs)},
             ],
+            stream=True,
         )
-        content = _extract_message_content(response)
+        content = _collect_stream_content(stream, operation="analysis")
         payload = json.loads(content)
         result = _validate_output(payload)
         elapsed_ms = int((time.time() - start) * 1000)
@@ -189,15 +240,16 @@ def _repair(
     start = time.time()
     content = ""
     try:
-        response = _get_client().chat.completions.create(
+        stream = _get_client().chat.completions.create(
             model=settings.DEEPSEEK_MODEL,
             temperature=0,
             messages=[
                 {"role": "system", "content": "Return valid JSON only."},
                 {"role": "user", "content": repair_prompt.format(**repair_inputs)},
             ],
+            stream=True,
         )
-        content = _extract_message_content(response)
+        content = _collect_stream_content(stream, operation="repair")
         payload = json.loads(content)
         result = _validate_output(payload)
         elapsed_ms = int((time.time() - start) * 1000)

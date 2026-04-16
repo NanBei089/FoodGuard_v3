@@ -40,7 +40,10 @@ def _run_ocr_with_bbox_fallback(
         logger.warning(
             "parallel_ocr_fallback_to_sequential",
             task_id=task_id,
+            error_type=type(exc).__name__,
             error_message=str(exc),
+            masked_full_image_bytes=len(masked_full_image),
+            cropped_image_bytes=len(cropped_image),
         )
 
     full_text_result = _run_ocr_full_text(masked_full_image)
@@ -50,18 +53,24 @@ def _run_ocr_with_bbox_fallback(
         logger.warning(
             "nutrition_table_cropped_scan_failed",
             task_id=task_id,
+            error_type=type(exc).__name__,
             error_message=str(exc),
+            cropped_image_bytes=len(cropped_image),
         )
         table_result = None
 
     if _table_result_is_incomplete(table_result):
+        cropped_quality = _table_result_quality(table_result)
         try:
             full_image_table_result = _run_ocr_table(image_bytes)
         except OCRServiceError as exc:
             logger.warning(
                 "nutrition_table_full_image_fallback_failed",
                 task_id=task_id,
+                error_type=type(exc).__name__,
                 error_message=str(exc),
+                cropped_quality=cropped_quality,
+                full_image_bytes=len(image_bytes),
             )
         else:
             selected_table_result = _choose_better_table_result(
@@ -71,7 +80,7 @@ def _run_ocr_with_bbox_fallback(
                 logger.info(
                     "nutrition_table_full_image_fallback_selected",
                     task_id=task_id,
-                    cropped_quality=_table_result_quality(table_result),
+                    cropped_quality=cropped_quality,
                     full_image_quality=_table_result_quality(full_image_table_result),
                 )
                 table_result = selected_table_result

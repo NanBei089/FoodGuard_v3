@@ -170,6 +170,26 @@ def _match_quality(matches: list[dict[str, Any]]) -> str:
     return "weak"
 
 
+def _rank_and_dedupe_matches(
+    items: list[dict[str, Any]], term: str
+) -> list[dict[str, Any]]:
+    best_by_id: dict[str, dict[str, Any]] = {}
+    unkeyed: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        match = _build_rag_match(item, term, index)
+        match_id = match["id"].strip()
+        if not match_id:
+            unkeyed.append(match)
+            continue
+        current = best_by_id.get(match_id)
+        if current is None or match["similarity_score"] > current["similarity_score"]:
+            best_by_id[match_id] = match
+
+    ranked = list(best_by_id.values()) + unkeyed
+    ranked.sort(key=lambda item: item["similarity_score"], reverse=True)
+    return ranked
+
+
 def _get_result_value(
     results: dict[str, Any],
     key: str,
@@ -260,9 +280,7 @@ def _build_retrieval_item(
     standard_matches: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     combined = ingredient_matches + (standard_matches or [])
-    matches = [
-        _build_rag_match(item, term, index) for index, item in enumerate(combined)
-    ]
+    matches = _rank_and_dedupe_matches(combined, term)
     return {
         "raw_term": term,
         "normalized_term": term,

@@ -88,10 +88,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
     activeStreamRef.current?.abort();
     activeStreamRef.current = null;
 
-    const initialState = buildConversationState(
-      reportId,
-      initialConversationRef.current,
-    );
+    const initialState = buildConversationState(reportId, initialConversationRef.current);
     setConversationId(initialState.conversationId);
     setMessages(initialState.messages);
     setSuggestions(initialState.suggestions);
@@ -141,9 +138,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
       setSuggestionsLoading(false);
 
       try {
-        const res = await apiGet<ReportConversationResponse | null>(
-          `/reports/${reportId}/chat`,
-        );
+        const res = await apiGet<ReportConversationResponse | null>(`/reports/${reportId}/chat`);
         if (cancelled) {
           return;
         }
@@ -287,7 +282,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
     } catch (err: unknown) {
       if (isActiveController() && (err as { name?: string }).name !== 'AbortError') {
         setMessages((current) => current.filter((item) => item.message_id !== tempAssistantId));
-        setError(getErrorMessage(err, '问答生成失败，请稍后重试'));
+        setError(getErrorMessage(err, '回答中断，未保存，请重试'));
       }
     } finally {
       const isLatestController = activeStreamRef.current === controller;
@@ -310,7 +305,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
           </div>
           <h3 className="text-lg font-bold text-slate-900">围绕当前报告继续深度讨论</h3>
           <p className="mt-1 text-sm leading-6 text-slate-500">
-            我会结合这份报告、你的健康档案和历史对话持续回答。
+            我会结合这份报告、你的健康偏好和历史对话持续回答。
           </p>
         </div>
         {conversationId && (
@@ -327,10 +322,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
         {suggestionsLoading ? (
           <div className="grid gap-2">
             {Array.from({ length: 4 }).map((_, index) => (
-              <div
-                key={index}
-                className="h-9 animate-pulse rounded-xl bg-slate-100"
-              />
+              <div key={index} className="h-9 animate-pulse rounded-xl bg-slate-100" />
             ))}
           </div>
         ) : suggestions.length > 0 ? (
@@ -377,9 +369,7 @@ export const ReportChatPanel = memo(function ReportChatPanel({
               >
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 shadow-sm ${
-                    isAssistant
-                      ? 'bg-white text-slate-700'
-                      : 'bg-slate-900 text-white'
+                    isAssistant ? 'bg-white text-slate-700' : 'bg-slate-900 text-white'
                   }`}
                 >
                   <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">
@@ -417,6 +407,9 @@ export const ReportChatPanel = memo(function ReportChatPanel({
 
       <div className="flex items-center gap-3">
         <Input
+          id="report-chat-message"
+          name="report-chat-message"
+          aria-label="继续追问这份报告"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           placeholder="继续追问这份报告..."

@@ -25,6 +25,11 @@ interface StreamReportChatOptions {
   onDone?: (payload: StreamDonePayload) => void;
 }
 
+export interface StreamReportChatResult {
+  doneEventReceived: boolean;
+  receivedDelta: boolean;
+}
+
 function parseSseEventBlock(block: string): { event: string; data: string } | null {
   const lines = block.split('\n');
   let event = '';
@@ -95,6 +100,10 @@ async function ensureStreamResponse(
   return response;
 }
 
+function normalizeSseBuffer(buffer: string) {
+  return buffer.replace(/\r\n/g, '\n');
+}
+
 export async function streamReportChat({
   reportId,
   message,
@@ -102,7 +111,7 @@ export async function streamReportChat({
   onMeta,
   onDelta,
   onDone,
-}: StreamReportChatOptions) {
+}: StreamReportChatOptions): Promise<StreamReportChatResult> {
   const response = await ensureStreamResponse(reportId, message, signal);
 
   if (!response.ok) {
@@ -123,42 +132,61 @@ export async function streamReportChat({
   const decoder = new TextDecoder();
   let buffer = '';
   let doneEventReceived = false;
+  let receivedDelta = false;
+
+  const consumeEventBlock = (block: string) => {
+    const normalizedBlock = block.trim();
+    if (!normalizedBlock) {
+      return;
+    }
+
+    const eventBlock = parseSseEventBlock(normalizedBlock);
+    if (!eventBlock) {
+      return;
+    }
+
+    const parsed = JSON.parse(eventBlock.data) as
+      | StreamMetaPayload
+      | StreamDonePayload
+      | StreamErrorPayload
+      | { text?: string };
+
+    if (eventBlock.event === 'meta') {
+      onMeta?.(parsed as StreamMetaPayload);
+      return;
+    }
+
+    if (eventBlock.event === 'delta') {
+      const chunk = (parsed as { text?: string }).text || '';
+      if (chunk) {
+        receivedDelta = true;
+      }
+      onDelta?.(chunk);
+      return;
+    }
+
+    if (eventBlock.event === 'done') {
+      doneEventReceived = true;
+      onDone?.(parsed as StreamDonePayload);
+      return;
+    }
+
+    if (eventBlock.event === 'error') {
+      throw new Error((parsed as StreamErrorPayload).message || '问答生成失败');
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    buffer = normalizeSseBuffer(buffer);
 
     let separatorIndex = buffer.indexOf('\n\n');
     while (separatorIndex >= 0) {
-      const block = buffer.slice(0, separatorIndex).trim();
+      const block = buffer.slice(0, separatorIndex);
       buffer = buffer.slice(separatorIndex + 2);
+      consumeEventBlock(block);
       separatorIndex = buffer.indexOf('\n\n');
-
-      if (!block) {
-        continue;
-      }
-
-      const eventBlock = parseSseEventBlock(block);
-      if (!eventBlock) {
-        continue;
-      }
-
-      const parsed = JSON.parse(eventBlock.data) as
-        | StreamMetaPayload
-        | StreamDonePayload
-        | StreamErrorPayload
-        | { text?: string };
-
-      if (eventBlock.event === 'meta') {
-        onMeta?.(parsed as StreamMetaPayload);
-      } else if (eventBlock.event === 'delta') {
-        onDelta?.((parsed as { text?: string }).text || '');
-      } else if (eventBlock.event === 'done') {
-        doneEventReceived = true;
-        onDone?.(parsed as StreamDonePayload);
-      } else if (eventBlock.event === 'error') {
-        throw new Error((parsed as StreamErrorPayload).message || '问答生成失败');
-      }
     }
 
     if (done) {
@@ -166,7 +194,19 @@ export async function streamReportChat({
     }
   }
 
-  if (!doneEventReceived) {
-    throw new Error('问答流已结束，但未收到完成事件');
+  const trailingBlock = buffer.trim();
+  if (trailingBlock) {
+    consumeEventBlock(trailingBlock);
   }
+
+  if (!doneEventReceived) {
+    throw new Error(
+      receivedDelta ? '回答中断，未保存，请重试' : '问答流已结束，但未收到完成事件',
+    );
+  }
+
+  return {
+    doneEventReceived,
+    receivedDelta,
+  };
 }

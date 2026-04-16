@@ -352,10 +352,19 @@ async def stream_report_chat(
             )
         except Exception as exc:
             await db.rollback()
+            failure_kind = "validation_error"
+            if isinstance(exc, LLMServiceError):
+                failure_kind = "llm_error"
+            elif not isinstance(exc, ValidationException):
+                failure_kind = (
+                    "stream_interrupted" if assistant_chunks else "stream_error"
+                )
             logger.error(
                 "report_chat_stream_failed",
                 report_id=str(report_id),
                 user_id=str(user_id),
+                failure_kind=failure_kind,
+                partial_response=bool(assistant_chunks),
                 error=str(exc),
             )
             yield _encode_sse_event(

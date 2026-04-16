@@ -6,7 +6,7 @@ import os
 from chromadb.errors import ChromaError
 import structlog
 from celery import Celery
-from celery.signals import worker_init
+from celery.signals import worker_init, worker_process_init
 
 from app.core.config import get_settings
 from app.core.errors import EmbeddingServiceError, LLMServiceError, OCRServiceError
@@ -15,6 +15,7 @@ from app.workers import llm_worker, ocr_worker, rag_worker, yolo_worker
 
 settings = get_settings()
 _IS_WINDOWS = os.name == "nt"
+_WARMED_UP_PID: int | None = None
 
 celery_app = Celery("food_label_analyzer")
 celery_app.conf.update(
@@ -39,11 +40,28 @@ celery_app.conf.update(
 importlib.import_module("app.tasks.analysis_task")
 
 
-def _initialize_worker_resources() -> None:
+def _configure_worker_resources() -> None:
     settings = get_settings()
     setup_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
     logger = structlog.get_logger(__name__)
     logger.info("celery_worker_initializing")
+
+    try:
+        llm_worker.validate_configuration()
+    except LLMServiceError as exc:
+        logger.warning("llm_configuration_invalid", error=str(exc))
+
+    logger.info("celery_worker_configured")
+
+
+def _warmup_worker_resources() -> None:
+    global _WARMED_UP_PID
+    current_pid = os.getpid()
+    if _WARMED_UP_PID == current_pid:
+        return
+
+    logger = structlog.get_logger(__name__)
+    logger.info("celery_worker_warming_up", pid=current_pid)
 
     try:
         yolo_worker.warmup()
@@ -60,17 +78,33 @@ def _initialize_worker_resources() -> None:
     except (ChromaError, EmbeddingServiceError, OSError, RuntimeError, ValueError) as exc:
         logger.warning("rag_warmup_failed", error=str(exc))
 
-    try:
-        llm_worker.validate_configuration()
-    except LLMServiceError as exc:
-        logger.warning("llm_configuration_invalid", error=str(exc))
+    _WARMED_UP_PID = current_pid
+    logger.info("celery_worker_warmed_up", pid=current_pid)
 
-    logger.info("celery_worker_initialized")
+
+def _initialize_worker_resources() -> None:
+    _configure_worker_resources()
+    _warmup_worker_resources()
 
 
 @worker_init.connect
 def on_worker_init(**kwargs) -> None:
-    _initialize_worker_resources()
+    _configure_worker_resources()
+    if _IS_WINDOWS:
+        _warmup_worker_resources()
 
 
-__all__ = ["celery_app", "on_worker_init"]
+@worker_process_init.connect
+def on_worker_process_init(**kwargs) -> None:
+    if not _IS_WINDOWS:
+        _warmup_worker_resources()
+
+
+__all__ = [
+    "celery_app",
+    "on_worker_init",
+    "on_worker_process_init",
+    "_configure_worker_resources",
+    "_warmup_worker_resources",
+    "_initialize_worker_resources",
+]

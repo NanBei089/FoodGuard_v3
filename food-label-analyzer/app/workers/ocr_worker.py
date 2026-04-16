@@ -192,26 +192,23 @@ def _build_parallel_result(
     )
 
 
-def _run_single_ocr(image_bytes: bytes, config: OCRConfig) -> dict[str, Any]:
-    client = PaddleOCRAPIClient(config)
-    job_id = client._submit_job(image_bytes)
-    job_data = client._poll_job(job_id)
-    result_url = job_data.get("resultUrl") or {}
-    json_url = result_url.get("jsonUrl") or result_url.get("jsonlUrl")
-    if not json_url:
-        raise RuntimeError(f"OCR job response did not include jsonUrl: {job_data}")
-    return client._download_jsonl_results(str(json_url))
+def _run_single_ocr(image_bytes: bytes, engine: Any) -> dict[str, Any]:
+    return engine.ocr(image_bytes)
 
 
 def _run_parallel_jobs(
     full_text_image_bytes: bytes,
     nutrition_image_bytes: bytes,
-    full_text_config: OCRConfig,
-    nutrition_config: OCRConfig,
+    full_text_engine: Any,
+    nutrition_engine: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future1 = executor.submit(_run_single_ocr, full_text_image_bytes, full_text_config)
-        future2 = executor.submit(_run_single_ocr, nutrition_image_bytes, nutrition_config)
+        future1 = executor.submit(
+            _run_single_ocr, full_text_image_bytes, full_text_engine
+        )
+        future2 = executor.submit(
+            _run_single_ocr, nutrition_image_bytes, nutrition_engine
+        )
         return future1.result(), future2.result()
 
 
@@ -231,15 +228,15 @@ def _recognize_parallel_remote(
     full_text_image_bytes: bytes,
     nutrition_image_bytes: bytes,
 ) -> OCRParallelResult:
-    full_text_config = _get_remote_ocr_engine().config
-    nutrition_config = _get_remote_nutrition_ocr_engine().config
+    full_text_engine = _get_remote_ocr_engine()
+    nutrition_engine = _get_remote_nutrition_ocr_engine()
     prepared_full_text_image_bytes = _prepare_remote_ocr_input(full_text_image_bytes)
     prepared_nutrition_image_bytes = _prepare_remote_ocr_input(nutrition_image_bytes)
     full_text_raw_result, nutrition_raw_result = _run_parallel_jobs(
         prepared_full_text_image_bytes,
         prepared_nutrition_image_bytes,
-        full_text_config,
-        nutrition_config,
+        full_text_engine,
+        nutrition_engine,
     )
     return _build_parallel_result(full_text_raw_result, nutrition_raw_result)
 

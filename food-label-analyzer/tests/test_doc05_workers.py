@@ -148,6 +148,59 @@ def test_yolo_detect_returns_bbox_from_mocked_session(
     assert bbox == {"x1": 10, "y1": 20, "x2": 110, "y2": 220, "confidence": 0.9}
 
 
+def test_yolo_detect_many_batches_valid_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    yolo_module = importlib.reload(importlib.import_module("app.workers.yolo_worker"))
+
+    class _FakeTensor:
+        def __init__(self, value):
+            self._value = value
+
+        def cpu(self):
+            return self
+
+        def tolist(self):
+            return self._value
+
+    class _FakeBoxes:
+        def __init__(self, xyxy, conf):
+            self.xyxy = _FakeTensor([xyxy])
+            self.conf = _FakeTensor([conf])
+            self.cls = _FakeTensor([0.0])
+
+        def __len__(self):
+            return 1
+
+    class _FakeResult:
+        def __init__(self, xyxy, conf):
+            self.orig_shape = (300, 400)
+            self.boxes = _FakeBoxes(xyxy, conf)
+
+    predict_calls: list[dict[str, object]] = []
+
+    class FakeModel:
+        def predict(self, *args, **kwargs):
+            predict_calls.append(kwargs)
+            assert len(kwargs["source"]) == 2
+            return [
+                _FakeResult([10.0, 20.0, 110.0, 220.0], 0.9),
+                _FakeResult([30.0, 40.0, 130.0, 240.0], 0.8),
+            ]
+
+    monkeypatch.setattr(yolo_module, "_get_model", lambda: FakeModel())
+
+    bboxes = yolo_module.detect_many([_image_bytes(), b"bad-image", _image_bytes()])
+
+    assert len(predict_calls) == 1
+    assert bboxes == [
+        {"x1": 10, "y1": 20, "x2": 110, "y2": 220, "confidence": 0.9},
+        None,
+        {"x1": 30, "y1": 40, "x2": 130, "y2": 240, "confidence": 0.8},
+    ]
+
+
 def test_yolo_crop_image_clamps_padding(monkeypatch: pytest.MonkeyPatch) -> None:
     load_required_env(monkeypatch)
     yolo_module = importlib.reload(importlib.import_module("app.workers.yolo_worker"))
@@ -296,10 +349,15 @@ def test_ocr_parallel_uses_full_and_cropped_inputs(
     full_calls: list[bytes] = []
     nutrition_calls: list[bytes] = []
 
-    def fake_run_single_ocr(image_bytes: bytes, config) -> dict[str, object]:
-        if config.model == "full-model":
-            full_calls.append(image_bytes)
-            return {"lines": [{"text": "配料：盐"}]}
+    class ForbiddenClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("parallel OCR should reuse cached engines")
+
+    def fake_full_ocr(image_bytes: bytes) -> dict[str, object]:
+        full_calls.append(image_bytes)
+        return {"lines": [{"text": "配料：盐"}]}
+
+    def fake_nutrition_ocr(image_bytes: bytes) -> dict[str, object]:
         nutrition_calls.append(image_bytes)
         return {
             "results": [
@@ -324,19 +382,21 @@ def test_ocr_parallel_uses_full_and_cropped_inputs(
             ]
         }
 
+    monkeypatch.setattr(ocr_module, "PaddleOCRAPIClient", ForbiddenClient)
     monkeypatch.setattr(
         ocr_module,
         "_get_remote_ocr_engine",
-        lambda: SimpleNamespace(config=SimpleNamespace(model="full-model")),
+        lambda: SimpleNamespace(ocr=fake_full_ocr),
     )
     monkeypatch.setattr(
         ocr_module,
         "_get_remote_nutrition_ocr_engine",
-        lambda: SimpleNamespace(config=SimpleNamespace(model="nutrition-model")),
+        lambda: SimpleNamespace(ocr=fake_nutrition_ocr),
     )
-    monkeypatch.setattr(ocr_module, "_run_single_ocr", fake_run_single_ocr)
 
-    result = ocr_module.recognize_parallel(b"full-image", nutrition_image_bytes=b"cropped-image")
+    result = ocr_module.recognize_parallel(
+        b"full-image", nutrition_image_bytes=b"cropped-image"
+    )
 
     assert full_calls == [b"full-image"]
     assert nutrition_calls == [b"cropped-image"]
@@ -746,9 +806,47 @@ def test_rag_embed_uses_ollama_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert vector == [0.1, 0.2, 0.3]
     assert fake_client.calls[0][0].endswith("/api/embed")
     assert fake_client.calls[0][1]["model"]
-    assert fake_client.calls[0][1]["input"] == "配料:食盐"
+    assert fake_client.calls[0][1]["input"] == ["配料:食盐"]
 
     assert fake_client.calls[0][2] == 30.0
+
+
+def test_rag_embed_batch_uses_array_input_and_validates_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object], float]] = []
+            self.response = FakeResponse({"embeddings": [[0.1], [0.2]]})
+
+        def post(self, url: str, json: dict[str, object], timeout: float):
+            self.calls.append((url, json, timeout))
+            return self.response
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(rag_module, "_get_http_client", lambda: fake_client)
+
+    vectors = rag_module._embed_batch(["salt", "sugar"])
+
+    assert vectors == [[0.1], [0.2]]
+    assert fake_client.calls[0][1]["input"] == ["salt", "sugar"]
+
+    fake_client.response = FakeResponse({"embeddings": [[0.1]]})
+    with pytest.raises(EmbeddingServiceError):
+        rag_module._embed_batch(["salt", "sugar"])
 
 
 def test_rag_chroma_client_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -838,43 +936,68 @@ def test_rag_retrieve_all_returns_schema_compatible_payload(
 ) -> None:
     load_required_env(monkeypatch)
     rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+    embed_calls: list[list[str]] = []
+    query_calls: list[tuple[str, int, int]] = []
+
+    def fake_embed_batch(texts: list[str]) -> list[list[float]]:
+        embed_calls.append(texts)
+        return [[0.1, 0.2] for _ in texts]
+
+    class FakeCollection:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def query(self, query_embeddings, n_results, include):
+            query_calls.append((self.label, len(query_embeddings), n_results))
+            if self.label == "ingredients":
+                return {
+                    "ids": [["ing-1"]],
+                    "documents": [["食用香精"]],
+                    "metadatas": [
+                        [
+                            {
+                                "term": "食用香精",
+                                "normalized_term": "食用香精",
+                                "aliases": ["香精"],
+                                "category": "flavoring",
+                            }
+                        ]
+                    ],
+                    "distances": [[0.08]],
+                }
+            return {
+                "ids": [["std-1"]],
+                "documents": [["允许使用"]],
+                "metadatas": [
+                    [
+                        {
+                            "term": "食用香精",
+                            "normalized_term": "食用香精",
+                            "aliases": [],
+                            "function_category": "standard",
+                            "is_primary": False,
+                        }
+                    ]
+                ],
+                "distances": [[0.22]],
+            }
+
+    monkeypatch.setattr(rag_module, "_embed_batch", fake_embed_batch)
     monkeypatch.setattr(
         rag_module,
-        "retrieve_all_ingredients",
-        lambda query_text, top_k=5: [
-            {
-                "id": "ing-1",
-                "document": "食用香精",
-                "metadata": {
-                    "term": "食用香精",
-                    "normalized_term": "食用香精",
-                    "aliases": ["香精"],
-                    "category": "flavoring",
-                },
-                "distance": 0.08,
-            }
-        ],
+        "_get_ingredients_collection",
+        lambda: FakeCollection("ingredients"),
     )
     monkeypatch.setattr(
         rag_module,
-        "query_gb2760_by_keyword",
-        lambda keyword, top_k=3: [
-            {
-                "id": "std-1",
-                "document": "允许使用",
-                "metadata": {
-                    "term": keyword,
-                    "normalized_term": keyword,
-                    "aliases": [],
-                    "function_category": "standard",
-                    "is_primary": False,
-                },
-                "distance": 0.22,
-            }
-        ],
+        "_get_standards_collection",
+        lambda: FakeCollection("standards"),
     )
 
     result = rag_module.retrieve_all(["食用香精"], "配料：食用香精")
+
+    assert embed_calls == [["食用香精"]]
+    assert query_calls == [("ingredients", 1, 5), ("standards", 1, 2)]
 
     assert result["source_file"] == "chromadb"
     assert result["ingredients_text"] == "配料：食用香精"
@@ -887,6 +1010,62 @@ def test_rag_retrieve_all_returns_schema_compatible_payload(
     assert len(retrieval_item["matches"]) == 2
     assert retrieval_item["matches"][0]["function_category"] == "flavoring"
     assert retrieval_item["matches"][0]["similarity_score"] == pytest.approx(0.92)
+
+
+def test_rag_retrieve_all_batches_multiple_terms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    rag_module = importlib.reload(importlib.import_module("app.workers.rag_worker"))
+    embed_calls: list[list[str]] = []
+    query_calls: list[tuple[str, int, int]] = []
+
+    monkeypatch.setattr(
+        rag_module,
+        "_embed_batch",
+        lambda texts: embed_calls.append(texts)
+        or [[float(index)] for index, _ in enumerate(texts)],
+    )
+
+    class FakeCollection:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def query(self, query_embeddings, n_results, include):
+            query_calls.append((self.label, len(query_embeddings), n_results))
+            return {
+                "ids": [
+                    [f"{self.label}-{index}"]
+                    for index in range(len(query_embeddings))
+                ],
+                "documents": [[self.label] for _ in query_embeddings],
+                "metadatas": [
+                    [{"term": f"term-{index}", "function_category": self.label}]
+                    for index, _ in enumerate(query_embeddings)
+                ],
+                "distances": [[0.1] for _ in query_embeddings],
+            }
+
+    monkeypatch.setattr(
+        rag_module,
+        "_get_ingredients_collection",
+        lambda: FakeCollection("ingredients"),
+    )
+    monkeypatch.setattr(
+        rag_module,
+        "_get_standards_collection",
+        lambda: FakeCollection("standards"),
+    )
+
+    result = rag_module.retrieve_all(["salt", "sugar", "salt"], "salt, sugar")
+
+    assert embed_calls == [["salt", "sugar"]]
+    assert query_calls == [("ingredients", 2, 5), ("standards", 2, 2)]
+    assert result["items_total"] == 2
+    assert [item["raw_term"] for item in result["retrieval_results"]] == [
+        "salt",
+        "sugar",
+    ]
 
 
 def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1032,12 +1211,13 @@ def test_llm_analyze_raises_when_repair_exhausted(
         )
 
 
-def test_celery_worker_init_runs_warmups_and_validation(
+def test_celery_worker_init_configures_prefork_without_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     load_required_env(monkeypatch)
     celery_module = importlib.reload(importlib.import_module("app.tasks.celery_app"))
     calls: list[str] = []
+    monkeypatch.setattr(celery_module, "_IS_WINDOWS", False)
 
     monkeypatch.setattr(
         celery_module, "setup_logging", lambda level, fmt: calls.append("logging")
@@ -1051,9 +1231,72 @@ def test_celery_worker_init_runs_warmups_and_validation(
         celery_module.llm_worker, "validate_configuration", lambda: calls.append("llm")
     )
 
-    celery_module._initialize_worker_resources()
+    celery_module.on_worker_init()
 
-    assert calls == ["logging", "yolo", "ocr", "rag", "llm"]
+    assert calls == ["logging", "llm"]
+
+
+def test_celery_worker_process_init_warms_prefork_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    celery_module = importlib.reload(importlib.import_module("app.tasks.celery_app"))
+    calls: list[str] = []
+    monkeypatch.setattr(celery_module, "_IS_WINDOWS", False)
+    monkeypatch.setattr(celery_module, "_WARMED_UP_PID", None)
+    monkeypatch.setattr(
+        celery_module.yolo_worker, "warmup", lambda: calls.append("yolo")
+    )
+    monkeypatch.setattr(celery_module.ocr_worker, "warmup", lambda: calls.append("ocr"))
+    monkeypatch.setattr(celery_module.rag_worker, "warmup", lambda: calls.append("rag"))
+
+    celery_module.on_worker_process_init()
+
+    assert calls == ["yolo", "ocr", "rag"]
+
+
+def test_celery_worker_init_warms_windows_solo_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    celery_module = importlib.reload(importlib.import_module("app.tasks.celery_app"))
+    calls: list[str] = []
+    monkeypatch.setattr(celery_module, "_IS_WINDOWS", True)
+    monkeypatch.setattr(celery_module, "_WARMED_UP_PID", None)
+    monkeypatch.setattr(
+        celery_module, "setup_logging", lambda level, fmt: calls.append("logging")
+    )
+    monkeypatch.setattr(
+        celery_module.yolo_worker, "warmup", lambda: calls.append("yolo")
+    )
+    monkeypatch.setattr(celery_module.ocr_worker, "warmup", lambda: calls.append("ocr"))
+    monkeypatch.setattr(celery_module.rag_worker, "warmup", lambda: calls.append("rag"))
+    monkeypatch.setattr(
+        celery_module.llm_worker, "validate_configuration", lambda: calls.append("llm")
+    )
+
+    celery_module.on_worker_init()
+
+    assert calls == ["logging", "llm", "yolo", "ocr", "rag"]
+
+
+def test_celery_worker_warmup_guard_skips_same_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    celery_module = importlib.reload(importlib.import_module("app.tasks.celery_app"))
+    calls: list[str] = []
+    monkeypatch.setattr(celery_module, "_WARMED_UP_PID", None)
+    monkeypatch.setattr(
+        celery_module.yolo_worker, "warmup", lambda: calls.append("yolo")
+    )
+    monkeypatch.setattr(celery_module.ocr_worker, "warmup", lambda: calls.append("ocr"))
+    monkeypatch.setattr(celery_module.rag_worker, "warmup", lambda: calls.append("rag"))
+
+    celery_module._warmup_worker_resources()
+    celery_module._warmup_worker_resources()
+
+    assert calls == ["yolo", "ocr", "rag"]
 
 
 def test_celery_worker_init_does_not_raise_on_nonfatal_warmup(
@@ -1073,4 +1316,4 @@ def test_celery_worker_init_does_not_raise_on_nonfatal_warmup(
         celery_module.llm_worker, "validate_configuration", lambda: None
     )
 
-    celery_module._initialize_worker_resources()
+    celery_module._warmup_worker_resources()

@@ -241,59 +241,114 @@ def warmup() -> None:
     detect_nutrition_bbox_from_results(results, select_top_k=1)
 
 
-def detect(
-    image_bytes: bytes, conf: float | None = None
+def _selected_result_to_bbox(result: dict[str, Any]) -> dict[str, int | float] | None:
+    if result["found"] and result["selected"] is not None:
+        xyxy = result["selected"]["xyxy"]
+        return {
+            "x1": xyxy[0],
+            "y1": xyxy[1],
+            "x2": xyxy[2],
+            "y2": xyxy[3],
+            "confidence": result["selected"]["conf"],
+        }
+    return None
+
+
+def _bbox_from_model_result(
+    result: Any, select_top_k: int
 ) -> dict[str, int | float] | None:
+    try:
+        parsed = detect_nutrition_bbox_from_results(
+            [result],
+            select_top_k=select_top_k,
+        )
+        return _selected_result_to_bbox(parsed)
+    except Exception as exc:
+        logger.warning("yolo_result_parse_failed", error=str(exc))
+        return None
+
+
+def detect_many(
+    image_bytes_list: Sequence[bytes], conf: float | None = None
+) -> list[dict[str, int | float] | None]:
     settings = get_settings()
     if conf is None:
         conf = settings.YOLO_CONFIDENCE_THRESHOLD
+
+    detections: list[dict[str, int | float] | None] = [None] * len(image_bytes_list)
+    if not image_bytes_list:
+        return detections
+
     try:
         model = _get_model()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        valid_images: list[Image.Image] = []
+        valid_indices: list[int] = []
+        for index, image_bytes in enumerate(image_bytes_list):
+            try:
+                image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            except (OSError, ValueError) as exc:
+                logger.warning("yolo_image_decode_failed", index=index, error=str(exc))
+                continue
+            valid_images.append(image)
+            valid_indices.append(index)
+
+        if not valid_images:
+            return detections
 
         try:
             results = model.predict(
-                source=image,
+                source=valid_images,
                 imgsz=settings.YOLO_INPUT_SIZE,
                 conf=conf,
                 verbose=False,
             )
-            result = detect_nutrition_bbox_from_results(
-                results, select_top_k=settings.YOLO_SELECT_TOP_K
-            )
+            for batch_index, result in enumerate(
+                list(results or [])[: len(valid_images)]
+            ):
+                detections[valid_indices[batch_index]] = _bbox_from_model_result(
+                    result,
+                    settings.YOLO_SELECT_TOP_K,
+                )
+            return detections
         except Exception:
             import os
             import tempfile
 
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                temp_path = tmp.name
+            temp_paths: list[str] = []
             try:
-                image.save(temp_path, format="JPEG")
-                result = detect_nutrition_bbox(
-                    model=model,
-                    model_path=settings.YOLO_MODEL_PATH,
-                    image_path=temp_path,
+                for image in valid_images:
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        temp_paths.append(tmp.name)
+                    image.save(temp_paths[-1], format="JPEG")
+
+                results = model.predict(
+                    source=temp_paths,
                     conf=conf,
                     imgsz=settings.YOLO_INPUT_SIZE,
-                    select_top_k=settings.YOLO_SELECT_TOP_K,
+                    verbose=False,
                 )
+                for batch_index, result in enumerate(
+                    list(results or [])[: len(temp_paths)]
+                ):
+                    detections[valid_indices[batch_index]] = _bbox_from_model_result(
+                        result,
+                        settings.YOLO_SELECT_TOP_K,
+                    )
             finally:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
+                for temp_path in temp_paths:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
 
-        if result["found"] and result["selected"] is not None:
-            xyxy = result["selected"]["xyxy"]
-            return {
-                "x1": xyxy[0],
-                "y1": xyxy[1],
-                "x2": xyxy[2],
-                "y2": xyxy[3],
-                "confidence": result["selected"]["conf"],
-            }
-        return None
+        return detections
     except Exception as exc:
         logger.warning("yolo_detect_failed", error=str(exc))
-        return None
+        return detections
+
+
+def detect(
+    image_bytes: bytes, conf: float | None = None
+) -> dict[str, int | float] | None:
+    return detect_many([image_bytes], conf=conf)[0]
 
 
 def crop_image(image_bytes: bytes, bbox: dict, padding: int | None = None) -> bytes:
@@ -344,6 +399,7 @@ def mask_image(image_bytes: bytes, bbox: dict, padding: int | None = None) -> by
 
 __all__ = [
     "detect",
+    "detect_many",
     "detect_nutrition_bbox",
     "crop_image",
     "mask_image",

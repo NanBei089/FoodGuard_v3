@@ -49,16 +49,30 @@ def _normalize_text(value: Any) -> str:
     return text
 
 
-def _embed(text: str) -> list[float]:
-    clean_text = _normalize_text(text)
-    if not clean_text:
+def _coerce_embedding_vector(vector: Any) -> list[float]:
+    if not isinstance(vector, list) or not vector:
+        raise EmbeddingServiceError(
+            "Ollama embedding response contains an invalid vector"
+        )
+
+    try:
+        return [float(item) for item in vector]
+    except (TypeError, ValueError) as exc:
+        raise EmbeddingServiceError(
+            "Ollama embedding vector contains non-numeric values"
+        ) from exc
+
+
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    clean_texts = [_normalize_text(text) for text in texts]
+    if not clean_texts or any(not text for text in clean_texts):
         raise EmbeddingServiceError("Embedding input is empty")
 
     settings = get_settings()
     endpoint = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/embed"
     payload = {
         "model": settings.OLLAMA_EMBEDDING_MODEL,
-        "input": clean_text,
+        "input": clean_texts,
         "truncate": True,
     }
 
@@ -79,21 +93,14 @@ def _embed(text: str) -> list[float]:
         ) from exc
 
     embeddings = data.get("embeddings")
-    if not isinstance(embeddings, list) or not embeddings:
+    if not isinstance(embeddings, list) or len(embeddings) != len(clean_texts):
         raise EmbeddingServiceError("Ollama embedding response is missing embeddings")
 
-    first_vector = embeddings[0]
-    if not isinstance(first_vector, list) or not first_vector:
-        raise EmbeddingServiceError(
-            "Ollama embedding response contains an invalid vector"
-        )
+    return [_coerce_embedding_vector(vector) for vector in embeddings]
 
-    try:
-        return [float(item) for item in first_vector]
-    except (TypeError, ValueError) as exc:
-        raise EmbeddingServiceError(
-            "Ollama embedding vector contains non-numeric values"
-        ) from exc
+
+def _embed(text: str) -> list[float]:
+    return _embed_batch([text])[0]
 
 
 def _embed_text(text: str) -> list[float]:
@@ -163,6 +170,108 @@ def _match_quality(matches: list[dict[str, Any]]) -> str:
     return "weak"
 
 
+def _get_result_value(
+    results: dict[str, Any],
+    key: str,
+    query_index: int,
+    item_index: int,
+    default: Any,
+) -> Any:
+    rows = results.get(key)
+    if not isinstance(rows, list) or query_index >= len(rows):
+        return default
+    row = rows[query_index]
+    if not isinstance(row, list) or item_index >= len(row):
+        return default
+    return row[item_index]
+
+
+def _extract_query_results(
+    results: dict[str, Any] | None,
+    query_index: int,
+) -> list[dict[str, Any]]:
+    if not results:
+        return []
+
+    ids_by_query = results.get("ids")
+    if not isinstance(ids_by_query, list) or query_index >= len(ids_by_query):
+        return []
+
+    ids = ids_by_query[query_index]
+    if not isinstance(ids, list) or not ids:
+        return []
+
+    retrieved: list[dict[str, Any]] = []
+    for item_index, item_id in enumerate(ids):
+        retrieved.append(
+            {
+                "id": item_id,
+                "document": _get_result_value(
+                    results, "documents", query_index, item_index, ""
+                ),
+                "metadata": _get_result_value(
+                    results, "metadatas", query_index, item_index, {}
+                ),
+                "distance": _get_result_value(
+                    results, "distances", query_index, item_index, 1.0
+                ),
+            }
+        )
+    return retrieved
+
+
+def _empty_query_batch(size: int) -> list[list[dict[str, Any]]]:
+    return [[] for _ in range(size)]
+
+
+def _query_collection_by_embeddings(
+    collection_getter: Any,
+    embeddings: list[list[float]],
+    top_k: int,
+) -> list[list[dict[str, Any]]]:
+    if not embeddings:
+        return []
+
+    try:
+        collection = collection_getter()
+    except ChromaError as exc:
+        logger.warning("chroma_collection_not_found", error=str(exc))
+        return _empty_query_batch(len(embeddings))
+
+    try:
+        results = collection.query(
+            query_embeddings=embeddings,
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+    except ChromaError as exc:
+        logger.warning("chroma_query_failed", error=str(exc))
+        return _empty_query_batch(len(embeddings))
+
+    return [
+        _extract_query_results(results, query_index)
+        for query_index in range(len(embeddings))
+    ]
+
+
+def _build_retrieval_item(
+    term: str,
+    ingredient_matches: list[dict[str, Any]],
+    standard_matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    combined = ingredient_matches + (standard_matches or [])
+    matches = [
+        _build_rag_match(item, term, index) for index, item in enumerate(combined)
+    ]
+    return {
+        "raw_term": term,
+        "normalized_term": term,
+        "retrieved": bool(matches),
+        "match_quality": _match_quality(matches),
+        "matches": matches,
+    }
+
+
 def _get_chroma_client() -> chromadb.Client:
     global _CHROMA_CLIENT, _CHROMA_CLIENT_PATH
     settings = get_settings()
@@ -218,41 +327,17 @@ def retrieve_all_ingredients(query_text: str, top_k: int = 5) -> list[dict[str, 
         return []
 
     try:
-        collection = _get_ingredients_collection()
-    except ChromaError as exc:
-        logger.warning("chroma_collection_not_found", error=str(exc))
-        return []
-
-    try:
-        query_embedding = _embed(query_text)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
-    except (ChromaError, EmbeddingServiceError) as exc:
+        query_embeddings = _embed_batch([query_text])
+    except EmbeddingServiceError as exc:
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 
-    if not results or not results.get("ids") or not results["ids"][0]:
-        return []
-
-    retrieved: list[dict[str, Any]] = []
-    for idx, ingredient_id in enumerate(results["ids"][0]):
-        doc = results["documents"][0][idx] if results.get("documents") else ""
-        meta = results["metadatas"][0][idx] if results.get("metadatas") else {}
-        distance = results["distances"][0][idx] if results.get("distances") else 1.0
-
-        retrieved.append(
-            {
-                "id": ingredient_id,
-                "document": doc,
-                "metadata": meta,
-                "distance": distance,
-            }
-        )
-
-    return retrieved
+    results = _query_collection_by_embeddings(
+        _get_ingredients_collection,
+        query_embeddings,
+        top_k,
+    )
+    return results[0] if results else []
 
 
 def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]]:
@@ -260,41 +345,17 @@ def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]
         return []
 
     try:
-        collection = _get_standards_collection()
-    except ChromaError as exc:
-        logger.warning("chroma_collection_not_found", error=str(exc))
-        return []
-
-    try:
-        query_embedding = _embed(keyword)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
-    except (ChromaError, EmbeddingServiceError) as exc:
+        query_embeddings = _embed_batch([keyword])
+    except EmbeddingServiceError as exc:
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 
-    if not results or not results.get("ids") or not results["ids"][0]:
-        return []
-
-    retrieved: list[dict[str, Any]] = []
-    for idx, doc_id in enumerate(results["ids"][0]):
-        doc = results["documents"][0][idx] if results.get("documents") else ""
-        meta = results["metadatas"][0][idx] if results.get("metadatas") else {}
-        distance = results["distances"][0][idx] if results.get("distances") else 1.0
-
-        retrieved.append(
-            {
-                "id": doc_id,
-                "document": doc,
-                "metadata": meta,
-                "distance": distance,
-            }
-        )
-
-    return retrieved
+    results = _query_collection_by_embeddings(
+        _get_standards_collection,
+        query_embeddings,
+        top_k,
+    )
+    return results[0] if results else []
 
 
 def retrieve_all(
@@ -317,23 +378,43 @@ def retrieve_all(
         if normalized and normalized not in normalized_terms:
             normalized_terms.append(normalized)
 
+    normalized_terms = normalized_terms[:MAX_RAG_TERMS]
     retrieval_items: list[dict[str, Any]] = []
-    for term in normalized_terms[:MAX_RAG_TERMS]:
-        ingredient_matches = retrieve_all_ingredients(term, top_k=top_k_ingredients)
-        standard_matches = query_gb2760_by_keyword(term, top_k=top_k_per_term)
-        combined = ingredient_matches + standard_matches
-        matches = [
-            _build_rag_match(item, term, index) for index, item in enumerate(combined)
-        ]
-        retrieval_items.append(
-            {
-                "raw_term": term,
-                "normalized_term": term,
-                "retrieved": bool(matches),
-                "match_quality": _match_quality(matches),
-                "matches": matches,
-            }
-        )
+    if normalized_terms:
+        try:
+            query_embeddings = _embed_batch(normalized_terms)
+        except EmbeddingServiceError as exc:
+            logger.warning("rag_embedding_batch_failed", error=str(exc))
+            retrieval_items = [
+                _build_retrieval_item(term, []) for term in normalized_terms
+            ]
+        else:
+            ingredient_results = _query_collection_by_embeddings(
+                _get_ingredients_collection,
+                query_embeddings,
+                top_k_ingredients,
+            )
+            standard_results = _query_collection_by_embeddings(
+                _get_standards_collection,
+                query_embeddings,
+                top_k_per_term,
+            )
+            for index, term in enumerate(normalized_terms):
+                retrieval_items.append(
+                    _build_retrieval_item(
+                        term,
+                        (
+                            ingredient_results[index]
+                            if index < len(ingredient_results)
+                            else []
+                        ),
+                        (
+                            standard_results[index]
+                            if index < len(standard_results)
+                            else []
+                        ),
+                    )
+                )
 
     if not retrieval_items and ingredients_text.strip():
         fallback_term = _normalize_term(ingredients_text)
@@ -416,4 +497,5 @@ __all__ = [
     "_get_ingredients_collection",
     "_get_standards_collection",
     "_embed",
+    "_embed_batch",
 ]

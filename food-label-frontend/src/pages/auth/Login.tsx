@@ -76,10 +76,14 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-5">
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">邮箱账号</label>
+            <label htmlFor="login-email" className="mb-2 block text-sm font-medium text-slate-700">
+              邮箱账号
+            </label>
             <div className="relative">
               <AtSign className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <Input
+                id="login-email"
+                name="login-email"
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
@@ -91,10 +95,14 @@ export default function Login() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">密码</label>
+            <label htmlFor="login-password" className="mb-2 block text-sm font-medium text-slate-700">
+              密码
+            </label>
             <div className="relative">
               <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <Input
+                id="login-password"
+                name="login-password"
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}

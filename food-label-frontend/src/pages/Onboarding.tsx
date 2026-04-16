@@ -138,10 +138,14 @@ export default function Onboarding() {
       <div className="w-full max-w-2xl">
         <div className="mb-10 text-center">
           <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-full border border-emerald-100 bg-white shadow-md">
-            <span className="text-3xl">🎀</span>
+            <span className="text-3xl">🧭</span>
           </div>
-          <h1 className="mb-3 text-3xl font-extrabold tracking-tight text-slate-900">欢迎加入 FoodGuard</h1>
-          <p className="text-lg text-slate-600">为了给你更准确的分析结果，请花 1 分钟完成这份个性化设置。</p>
+          <h1 className="mb-3 text-3xl font-extrabold tracking-tight text-slate-900">
+            完成 FoodGuard 初始化
+          </h1>
+          <p className="text-lg text-slate-600">
+            为了生成更准确的分析结果，请先完成以下必填设置。
+          </p>
         </div>
 
         <div className="soft-panel rounded-[30px] p-8">
@@ -160,12 +164,19 @@ export default function Onboarding() {
                 基本信息
               </h2>
               <div className="ml-8">
-                <label className="mb-2 block text-sm font-medium text-slate-700">你希望我们怎么称呼你？</label>
+                <label
+                  htmlFor="onboarding-display-name"
+                  className="mb-2 block text-sm font-medium text-slate-700"
+                >
+                  你希望我们怎么称呼你？
+                </label>
                 <input
+                  id="onboarding-display-name"
+                  name="onboarding-display-name"
                   type="text"
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="例如：小李 / 妈妈 / 健身中的我"
+                  placeholder="例如：小林 / 妈妈 / 健身中的我"
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
@@ -210,7 +221,7 @@ export default function Onboarding() {
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-sm text-emerald-600">
                   3
                 </span>
-                有需要特别关注的健康状况吗？
+                是否有需要特别关注的健康状况？
                 <span className="text-sm font-normal text-slate-400">(可选)</span>
               </h2>
               <div className="ml-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -228,7 +239,9 @@ export default function Onboarding() {
                       }`}
                     >
                       <div className="mb-1 font-bold text-slate-900">{option.label}</div>
-                      <div className="text-xs text-slate-500">{healthConditionDescriptions[option.id]}</div>
+                      <div className="text-xs text-slate-500">
+                        {healthConditionDescriptions[option.id]}
+                      </div>
                     </button>
                   );
                 })}
@@ -240,14 +253,23 @@ export default function Onboarding() {
                 >
                   <button type="button" onClick={toggleAllergyCondition} className="w-full pr-10 text-left">
                     <div className="mb-1 font-bold text-slate-900">食物过敏</div>
-                    <div className="text-xs text-slate-500">填写后，系统会优先高亮与你过敏源相关的成分。</div>
+                    <div className="text-xs text-slate-500">
+                      填写后，系统会优先高亮与你过敏源相关的成分。
+                    </div>
                   </button>
 
                   {hasAllergyCondition && (
                     <div className="mt-3 border-t border-slate-100 pt-3">
-                      <label className="mb-2 block text-xs font-semibold text-slate-700">过敏源</label>
+                      <label
+                        htmlFor="onboarding-allergy-input"
+                        className="mb-2 block text-xs font-semibold text-slate-700"
+                      >
+                        过敏源
+                      </label>
                       <div className="flex gap-2">
                         <input
+                          id="onboarding-allergy-input"
+                          name="onboarding-allergy-input"
                           type="text"
                           value={allergyInput}
                           onChange={(event) => setAllergyInput(event.target.value)}
@@ -257,7 +279,7 @@ export default function Onboarding() {
                               addAllergy();
                             }
                           }}
-                          placeholder="例如：花生、牛奶、麸质"
+                          placeholder="例如：花生、牛奶、海鲜"
                           className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                         />
                         <Button type="button" onClick={addAllergy} className="bg-emerald-500 hover:bg-emerald-600">
@@ -290,20 +312,13 @@ export default function Onboarding() {
               </div>
             </section>
 
-            <div className="ml-8 flex items-center gap-4 pt-4">
-              <button
-                type="button"
-                onClick={() => navigate('/')}
-                className="rounded-xl bg-slate-100 px-6 py-3.5 font-medium text-slate-600 transition-colors hover:bg-slate-200"
-              >
-                跳过，以后再设
-              </button>
+            <div className="ml-8 pt-4">
               <Button
                 type="button"
                 size="lg"
                 onClick={handleSubmit}
                 isLoading={saving}
-                className="flex-1 rounded-xl bg-emerald-500 font-bold hover:bg-emerald-600"
+                className="w-full rounded-xl bg-emerald-500 font-bold hover:bg-emerald-600"
               >
                 完成设置，进入首页
                 {!saving && <ArrowRight className="ml-2 h-5 w-5" />}

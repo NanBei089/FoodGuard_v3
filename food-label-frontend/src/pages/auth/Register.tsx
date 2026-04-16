@@ -189,10 +189,14 @@ export default function Register() {
 
         <form onSubmit={handleRegister} className="space-y-5">
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">邮箱账号</label>
+            <label htmlFor="register-email" className="mb-2 block text-sm font-medium text-slate-700">
+              邮箱账号
+            </label>
             <div className="relative">
               <AtSign className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <Input
+                id="register-email"
+                name="register-email"
                 type="email"
                 value={email}
                 onChange={(event) => {
@@ -208,11 +212,15 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">邮箱验证码</label>
+            <label htmlFor="register-code" className="mb-2 block text-sm font-medium text-slate-700">
+              邮箱验证码
+            </label>
             <div className="flex gap-3">
               <div className="relative flex-1">
                 <BadgeCheck className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
                 <Input
+                  id="register-code"
+                  name="register-code"
                   type="text"
                   value={code}
                   onChange={(event) => {
@@ -239,10 +247,14 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">设置密码</label>
+            <label htmlFor="register-password" className="mb-2 block text-sm font-medium text-slate-700">
+              设置密码
+            </label>
             <div className="relative">
               <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <Input
+                id="register-password"
+                name="register-password"
                 type="password"
                 value={password}
                 onChange={(event) => {
@@ -259,10 +271,14 @@ export default function Register() {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">确认密码</label>
+            <label htmlFor="register-confirm-password" className="mb-2 block text-sm font-medium text-slate-700">
+              确认密码
+            </label>
             <div className="relative">
               <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
               <Input
+                id="register-confirm-password"
+                name="register-confirm-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(event) => {

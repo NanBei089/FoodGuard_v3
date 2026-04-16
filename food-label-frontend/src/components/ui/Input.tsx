@@ -10,7 +10,7 @@ export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, error, startIcon, iconClassName, id, ...props }, ref) => {
+  ({ className, error, startIcon, iconClassName, id, name, ...props }, ref) => {
     const errorId = error && id ? `${id}-error` : undefined;
     return (
       <div className="w-full">
@@ -32,6 +32,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           <input
             ref={ref}
             id={id}
+            name={name ?? id}
             aria-invalid={error ? 'true' : 'false'}
             aria-describedby={errorId}
             className={cn(

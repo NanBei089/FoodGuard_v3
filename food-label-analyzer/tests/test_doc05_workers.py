@@ -190,7 +190,7 @@ def test_yolo_warmup_calls_predict(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_ocr_remote_full_text_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="remote")
+    load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
     remote_calls: list[bytes] = []
     monkeypatch.setattr(
@@ -202,81 +202,10 @@ def test_ocr_remote_full_text_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.raw_text == "ok"
 
 
-def test_ocr_local_full_text_falls_back_to_remote_on_local_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    remote_calls: list[bytes] = []
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda _: (_ for _ in ()).throw(RuntimeError("bad"))
-        ),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda image_bytes: (
-                remote_calls.append(image_bytes)
-                or {"lines": [{"text": "remote ok"}]}
-            )
-        ),
-    )
-    result = ocr_module.recognize_full_text(_image_bytes((32, 32)))
-    assert result.raw_text == "remote ok"
-    assert len(remote_calls) == 1
-
-
-def test_ocr_local_full_text_does_not_fallback_on_empty_result(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_ocr_engine",
-        lambda: SimpleNamespace(ocr=lambda _: {"lines": [{"text": "配料：盐"}]}),
-    )
-    result = ocr_module.recognize_full_text(_image_bytes((32, 32)))
-    assert result.raw_text == "配料：盐"
-
-
-def test_ocr_local_empty_result_does_not_fallback_to_remote(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    remote_calls: list[bytes] = []
-
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_ocr_engine",
-        lambda: SimpleNamespace(ocr=lambda _: {"lines": []}),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda image_bytes: (
-                remote_calls.append(image_bytes)
-                or {"lines": [{"text": "should not run"}]}
-            )
-        ),
-    )
-
-    result = ocr_module.recognize_full_text(_image_bytes((32, 32)))
-
-    assert result.raw_text == ""
-    assert remote_calls == []
-
-
 def test_ocr_recognize_nutrition_table_normalizes_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="remote")
+    load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
     table_html = (
         "<table><tr><td>项目</td><td>每100g</td><td>NRV%</td></tr>"
@@ -313,104 +242,10 @@ def test_ocr_recognize_nutrition_table_normalizes_payload(
     assert result.table_json["rows"][1] == ["能量", "100kJ", "1%"]
 
 
-def test_ocr_local_nutrition_table_falls_back_to_remote_on_local_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    table_html = (
-        "<table><tr><td>椤圭洰</td><td>姣?00g</td></tr>"
-        "<tr><td>鑳介噺</td><td>100kJ</td></tr></table>"
-    )
-    remote_calls: list[bytes] = []
-
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_nutrition_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda _: (_ for _ in ()).throw(RuntimeError("local fail"))
-        ),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_nutrition_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda image_bytes: (
-                remote_calls.append(image_bytes)
-                or {
-                    "results": [
-                        {
-                            "layoutParsingResults": [
-                                {
-                                    "prunedResult": {
-                                        "parsing_res_list": [
-                                            {
-                                                "block_label": "table",
-                                                "block_content": table_html,
-                                            }
-                                        ]
-                                    }
-                                }
-                            ]
-                        }
-                    ]
-                }
-            )
-        ),
-    )
-
-    result = ocr_module.recognize_nutrition_table(_image_bytes((32, 32)))
-
-    assert result.table_json is not None
-    assert result.table_json["rows"][1] == ["鑳介噺", "100kJ"]
-    assert len(remote_calls) == 1
-
-
-def test_ocr_local_nutrition_empty_result_does_not_fallback_to_remote(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    remote_calls: list[bytes] = []
-
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_nutrition_ocr_engine",
-        lambda: SimpleNamespace(ocr=lambda _: {"results": [{"layoutParsingResults": []}]}),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_nutrition_ocr_engine",
-        lambda: SimpleNamespace(
-            ocr=lambda image_bytes: (
-                remote_calls.append(image_bytes)
-                or {"results": [{"layoutParsingResults": []}]}
-            )
-        ),
-    )
-
-    result = ocr_module.recognize_nutrition_table(_image_bytes((32, 32)))
-
-    assert result.table_json is None
-    assert remote_calls == []
-
-
-def test_ocr_warmup_probes_all_engines_in_local_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
+def test_ocr_warmup_probes_remote_engines(monkeypatch: pytest.MonkeyPatch) -> None:
+    load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
     calls: list[str] = []
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_ocr_engine",
-        lambda: calls.append("local_full"),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_nutrition_ocr_engine",
-        lambda: calls.append("local_nutrition"),
-    )
     monkeypatch.setattr(
         ocr_module,
         "_get_remote_ocr_engine",
@@ -424,12 +259,7 @@ def test_ocr_warmup_probes_all_engines_in_local_mode(
 
     ocr_module.warmup()
 
-    assert calls == [
-        "local_full",
-        "local_nutrition",
-        "remote_full",
-        "remote_nutrition",
-    ]
+    assert calls == ["remote_full", "remote_nutrition"]
 
 
 def test_ocr_uses_dedicated_nutrition_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -461,7 +291,7 @@ def test_ocr_uses_dedicated_nutrition_model(monkeypatch: pytest.MonkeyPatch) -> 
 def test_ocr_parallel_uses_full_and_cropped_inputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="remote")
+    load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
     full_calls: list[bytes] = []
     nutrition_calls: list[bytes] = []
@@ -515,62 +345,10 @@ def test_ocr_parallel_uses_full_and_cropped_inputs(
     assert result.nutrition_table.ocr_fallback_text == "能量 100kJ 1%"
 
 
-def test_ocr_parallel_falls_back_to_remote_on_local_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="local")
-    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
-    full_calls: list[bytes] = []
-    nutrition_calls: list[bytes] = []
-
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_ocr_engine",
-        lambda: SimpleNamespace(
-            device="cpu",
-            ocr=lambda _: (_ for _ in ()).throw(RuntimeError("local fail")),
-        ),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_local_nutrition_ocr_engine",
-        lambda: SimpleNamespace(device="cpu", ocr=lambda _: {"lines": []}),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_ocr_engine",
-        lambda: SimpleNamespace(config=SimpleNamespace(model="full-model")),
-    )
-    monkeypatch.setattr(
-        ocr_module,
-        "_get_remote_nutrition_ocr_engine",
-        lambda: SimpleNamespace(config=SimpleNamespace(model="nutrition-model")),
-    )
-
-    def fake_run_single_ocr(image_bytes: bytes, config) -> dict[str, object]:
-        if config.model == "full-model":
-            full_calls.append(image_bytes)
-            return {"lines": [{"text": "remote full"}]}
-        nutrition_calls.append(image_bytes)
-        return {"results": [{"lines": [{"text": "remote nutrition"}]}]}
-
-    monkeypatch.setattr(ocr_module, "_run_single_ocr", fake_run_single_ocr)
-
-    result = ocr_module.recognize_parallel(
-        b"full-image",
-        nutrition_image_bytes=b"cropped-image",
-    )
-
-    assert full_calls == [b"full-image"]
-    assert nutrition_calls == [b"cropped-image"]
-    assert result.full_text.raw_text == "remote full"
-    assert result.nutrition_table.ocr_fallback_text == "remote nutrition"
-
-
 def test_ocr_download_jsonl_results_retries_transient_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="remote")
+    load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
     attempts: list[int] = []
 
@@ -1102,7 +880,7 @@ def test_llm_analyze_returns_validated_payload(monkeypatch: pytest.MonkeyPatch) 
 def test_llm_analyze_includes_recognized_ingredient_terms_in_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    load_required_env(monkeypatch, PADDLEOCR_MODE="remote")
+    load_required_env(monkeypatch)
     llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
     monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
     payload = _valid_llm_payload()

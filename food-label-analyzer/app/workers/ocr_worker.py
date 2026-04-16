@@ -10,7 +10,6 @@ import structlog
 from app.core.config import get_settings
 from app.core.errors import OCRServiceError
 from app.workers.ocr import client as ocr_client
-from app.workers.ocr import local_engine as ocr_local
 from app.workers.ocr.cache import _ENGINE_CACHE, get_cached_engine
 from app.workers.ocr.parsing import (
     _convert_table_to_nutrition_json,
@@ -40,10 +39,6 @@ _OCR_RUNTIME_EXCEPTIONS = (
     OSError,
     ValueError,
 )
-
-
-def _is_local_ocr_mode() -> bool:
-    return get_settings().PADDLEOCR_MODE == "local"
 
 
 def _build_ocr_config(model: str) -> OCRConfig:
@@ -81,52 +76,6 @@ def _build_ocr_config(model: str) -> OCRConfig:
     )
 
 
-def _get_local_ocr_engine() -> Any:
-    settings = get_settings()
-    device = ocr_local.resolve_device(settings.PADDLEOCR_DEVICE)
-    cache_key = (
-        f"local:text:{device}:{settings.PADDLEOCR_LOCAL_PRECISION}:"
-        f"{settings.PADDLEOCR_LOCAL_MODEL_DIR or ''}"
-    )
-    return get_cached_engine(
-        cache_key,
-        lambda: ocr_local.LocalPaddleOCRClient(
-            device=device,
-            precision=settings.PADDLEOCR_LOCAL_PRECISION,
-            cpu_threads=settings.PADDLEOCR_LOCAL_CPU_THREADS,
-            enable_mkldnn=settings.PADDLEOCR_LOCAL_ENABLE_MKLDNN,
-            use_doc_orientation_classify=settings.PADDLEOCR_USE_DOC_ORIENTATION_CLASSIFY,
-            use_doc_unwarping=settings.PADDLEOCR_USE_DOC_UNWARPING,
-            use_textline_orientation=settings.PADDLEOCR_USE_TEXTLINE_ORIENTATION,
-            text_det_limit_side_len=settings.PADDLEOCR_TEXT_DET_LIMIT_SIDE_LEN,
-            text_det_limit_type=settings.PADDLEOCR_TEXT_DET_LIMIT_TYPE,
-            text_det_thresh=settings.PADDLEOCR_TEXT_DET_THESH,
-            text_det_box_thresh=settings.PADDLEOCR_DET_DB_BOX_THRESH,
-            text_det_unclip_ratio=settings.PADDLEOCR_DET_DB_UNCLIP_RATIO,
-            local_model_dir=settings.PADDLEOCR_LOCAL_MODEL_DIR,
-        ),
-    )
-
-
-def _get_local_nutrition_ocr_engine() -> Any:
-    settings = get_settings()
-    device = ocr_local.resolve_device(settings.PADDLEOCR_DEVICE)
-    cache_key = (
-        f"local:table:{device}:{settings.PADDLEOCR_LOCAL_PRECISION}:"
-        f"{settings.PADDLEOCR_LOCAL_MODEL_DIR or ''}"
-    )
-    return get_cached_engine(
-        cache_key,
-        lambda: ocr_local.LocalPPStructureClient(
-            device=device,
-            precision=settings.PADDLEOCR_LOCAL_PRECISION,
-            cpu_threads=settings.PADDLEOCR_LOCAL_CPU_THREADS,
-            enable_mkldnn=settings.PADDLEOCR_LOCAL_ENABLE_MKLDNN,
-            local_model_dir=settings.PADDLEOCR_LOCAL_MODEL_DIR,
-        ),
-    )
-
-
 def _get_remote_ocr_engine() -> Any:
     settings = get_settings()
     config = _build_ocr_config(settings.PADDLEOCR_MODEL)
@@ -141,26 +90,7 @@ def _get_remote_nutrition_ocr_engine() -> Any:
     return get_cached_engine(cache_key, lambda: PaddleOCR(config))
 
 
-def _get_ocr_engine() -> Any:
-    if _is_local_ocr_mode():
-        return _get_local_ocr_engine()
-    return _get_remote_ocr_engine()
-
-
-def _get_nutrition_ocr_engine() -> Any:
-    if _is_local_ocr_mode():
-        return _get_local_nutrition_ocr_engine()
-    return _get_remote_nutrition_ocr_engine()
-
-
 def warmup() -> None:
-    if _is_local_ocr_mode():
-        _get_local_ocr_engine()
-        _get_local_nutrition_ocr_engine()
-        _get_remote_ocr_engine()
-        _get_remote_nutrition_ocr_engine()
-        return
-
     _get_remote_ocr_engine()
     _get_remote_nutrition_ocr_engine()
 
@@ -285,41 +215,16 @@ def _run_parallel_jobs(
         return future1.result(), future2.result()
 
 
-def _recognize_full_text_local(image_bytes: bytes) -> OCRTextResult:
-    engine = _get_local_ocr_engine()
-    return _build_full_text_result(engine.ocr(image_bytes))
-
-
 def _recognize_full_text_remote(image_bytes: bytes) -> OCRTextResult:
     engine = _get_remote_ocr_engine()
     prepared_image_bytes = _prepare_remote_ocr_input(image_bytes)
     return _build_full_text_result(engine.ocr(prepared_image_bytes))
 
 
-def _recognize_nutrition_table_local(image_bytes: bytes) -> TableRecognitionResult:
-    engine = _get_local_nutrition_ocr_engine()
-    return _build_nutrition_table_result(engine.ocr(image_bytes))
-
-
 def _recognize_nutrition_table_remote(image_bytes: bytes) -> TableRecognitionResult:
     engine = _get_remote_nutrition_ocr_engine()
     prepared_image_bytes = _prepare_remote_ocr_input(image_bytes)
     return _build_nutrition_table_result(engine.ocr(prepared_image_bytes))
-
-
-def _recognize_parallel_local(
-    full_text_image_bytes: bytes,
-    nutrition_image_bytes: bytes,
-) -> OCRParallelResult:
-    full_engine = _get_local_ocr_engine()
-    nutrition_engine = _get_local_nutrition_ocr_engine()
-    if getattr(full_engine, "device", None) == "gpu":
-        logger.debug("local_gpu_parallel_may_serialize")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future1 = executor.submit(full_engine.ocr, full_text_image_bytes)
-        future2 = executor.submit(nutrition_engine.ocr, nutrition_image_bytes)
-        return _build_parallel_result(future1.result(), future2.result())
 
 
 def _recognize_parallel_remote(
@@ -355,45 +260,23 @@ def _log_and_raise_ocr_runtime_failure(
 
 
 def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
-    if _is_local_ocr_mode():
-        try:
-            return _recognize_full_text_local(image_bytes)
-        except _OCR_RUNTIME_EXCEPTIONS as exc:
-            logger.warning(
-                "ocr_local_failed_fallback_remote",
-                operation="full_text",
-                error=str(exc),
-            )
-
     try:
         return _recognize_full_text_remote(image_bytes)
     except _OCR_RUNTIME_EXCEPTIONS as exc:
-        mode = "remote_fallback" if _is_local_ocr_mode() else "remote"
         _log_and_raise_ocr_runtime_failure(
             operation="full_text",
-            mode=mode,
+            mode="remote",
             exc=exc,
         )
 
 
 def recognize_nutrition_table(image_bytes: bytes) -> TableRecognitionResult:
-    if _is_local_ocr_mode():
-        try:
-            return _recognize_nutrition_table_local(image_bytes)
-        except _OCR_RUNTIME_EXCEPTIONS as exc:
-            logger.warning(
-                "ocr_local_failed_fallback_remote",
-                operation="nutrition_table",
-                error=str(exc),
-            )
-
     try:
         return _recognize_nutrition_table_remote(image_bytes)
     except _OCR_RUNTIME_EXCEPTIONS as exc:
-        mode = "remote_fallback" if _is_local_ocr_mode() else "remote"
         _log_and_raise_ocr_runtime_failure(
             operation="nutrition_table",
-            mode=mode,
+            mode="remote",
             exc=exc,
         )
 
@@ -405,23 +288,12 @@ def recognize_parallel(
     if nutrition_image_bytes is None:
         nutrition_image_bytes = full_text_image_bytes
 
-    if _is_local_ocr_mode():
-        try:
-            return _recognize_parallel_local(full_text_image_bytes, nutrition_image_bytes)
-        except _OCR_RUNTIME_EXCEPTIONS as exc:
-            logger.warning(
-                "ocr_local_failed_fallback_remote",
-                operation="parallel",
-                error=str(exc),
-            )
-
     try:
         return _recognize_parallel_remote(full_text_image_bytes, nutrition_image_bytes)
     except _OCR_RUNTIME_EXCEPTIONS as exc:
-        mode = "remote_fallback" if _is_local_ocr_mode() else "remote"
         _log_and_raise_ocr_runtime_failure(
             operation="parallel",
-            mode=mode,
+            mode="remote",
             exc=exc,
         )
 
@@ -436,12 +308,8 @@ __all__ = [
     "requests",
     "time",
     "_ENGINE_CACHE",
-    "_get_local_ocr_engine",
-    "_get_local_nutrition_ocr_engine",
     "_get_remote_ocr_engine",
     "_get_remote_nutrition_ocr_engine",
-    "_get_ocr_engine",
-    "_get_nutrition_ocr_engine",
     "_run_single_ocr",
     "warmup",
     "recognize_full_text",

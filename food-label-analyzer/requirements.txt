@@ -27,7 +27,3 @@ tenacity>=8.2.3
 ultralytics>=8.1.0
 onnx>=1.16.0
 onnxruntime>=1.17.0
-
-# Optional local PaddleOCR runtime:
-# GPU: pip install paddlepaddle-gpu==3.0.0 paddleocr==3.0.0
-# CPU: pip install paddlepaddle==3.0.0 paddleocr==3.0.0

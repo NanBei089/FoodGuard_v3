@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,13 +40,7 @@ class Settings(BaseSettings):
     MINIO_USE_SSL: bool = False
     MINIO_BUCKET_NAME: str = "food-analyzer"
 
-    # --- PaddleOCR (在线 API) ---
-    PADDLEOCR_MODE: Literal["local", "remote"] = "remote"
-    PADDLEOCR_DEVICE: Literal["auto", "gpu", "cpu"] = "auto"
-    PADDLEOCR_LOCAL_MODEL_DIR: str | None = "./models_store/paddleocr"
-    PADDLEOCR_LOCAL_ENABLE_MKLDNN: bool = True
-    PADDLEOCR_LOCAL_CPU_THREADS: int = 6
-    PADDLEOCR_LOCAL_PRECISION: Literal["fp32", "fp16"] = "fp16"
+    # --- PaddleOCR (online API) ---
     PADDLEOCR_JOB_URL: str = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
     PADDLEOCR_TOKEN: SecretStr = SecretStr("")
     PADDLEOCR_MODEL: str = "PaddleOCR-VL-1.5"
@@ -235,13 +228,6 @@ class Settings(BaseSettings):
     def validate_max_upload_size_mb(cls, value: int) -> int:
         if not 1 <= value <= 50:
             raise ValueError("MAX_UPLOAD_SIZE_MB must be between 1 and 50")
-        return value
-
-    @field_validator("PADDLEOCR_LOCAL_CPU_THREADS")
-    @classmethod
-    def validate_paddleocr_local_cpu_threads(cls, value: int) -> int:
-        if value < 1:
-            raise ValueError("PADDLEOCR_LOCAL_CPU_THREADS must be at least 1")
         return value
 
     @field_validator("REPORT_CHAT_MAX_MESSAGE_CHARS")

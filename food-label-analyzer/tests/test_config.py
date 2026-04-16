@@ -17,7 +17,6 @@ REQUIRED_ENV_VARS = {
     "DATABASE_SYNC_URL": "postgresql+psycopg://postgres:password@localhost:5432/food_analyzer",
     "MINIO_ACCESS_KEY": "minioadmin",
     "MINIO_SECRET_KEY": "minio-secret",
-    "PADDLEOCR_MODE": "remote",
     "PADDLEOCR_JOB_URL": "https://paddle-ocr.example.com/api/v1/ocr/job",
     "PADDLEOCR_TOKEN": "paddle-token",
     "DEEPSEEK_API_KEY": "deepseek-api-key",
@@ -152,7 +151,6 @@ def test_cors_origins_list_supports_wildcard(monkeypatch: pytest.MonkeyPatch) ->
         ("YOLO_CONFIDENCE_THRESHOLD", "1"),
         ("SMTP_PORT", "26"),
         ("MAX_UPLOAD_SIZE_MB", "0"),
-        ("PADDLEOCR_LOCAL_CPU_THREADS", "0"),
     ],
 )
 def test_validation_rules_reject_invalid_values(
@@ -194,9 +192,8 @@ def test_env_example_keys_match_settings_fields() -> None:
 def test_env_example_contains_expected_defaults() -> None:
     env_values = parse_env_example()
 
-    assert env_values["PADDLEOCR_MODE"] == "remote"
-    assert env_values["PADDLEOCR_DEVICE"] == "auto"
-    assert env_values["PADDLEOCR_LOCAL_PRECISION"] == "fp16"
+    assert env_values["PADDLEOCR_MODEL"] == "PaddleOCR-VL-1.5"
+    assert env_values["PADDLEOCR_NUTRITION_MODEL"] == "PP-StructureV3"
     assert env_values["CHROMADB_COLLECTION_INGREDIENTS"] == "gb2760_a1_grouped"
     assert env_values["CHROMADB_COLLECTION_STANDARDS"] == "gb2760_a1_grouped"
     assert env_values["OLLAMA_EMBEDDING_MODEL"] == "qwen3-embedding:latest"

@@ -21,7 +21,6 @@ REQUIRED_ENV_VARS = {
     "DATABASE_SYNC_URL": "postgresql+psycopg://postgres:password@localhost:5432/food_analyzer",
     "MINIO_ACCESS_KEY": "minioadmin",
     "MINIO_SECRET_KEY": "minio-secret",
-    "PADDLEOCR_MODE": "remote",
     "PADDLEOCR_JOB_URL": "https://paddle-ocr.example.com/api/v1/ocr/job",
     "PADDLEOCR_TOKEN": "paddle-token",
     "DEEPSEEK_API_KEY": "deepseek-api-key",
@@ -247,7 +246,7 @@ def test_main_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         main_module,
         "_run_with_timeout",
-        AsyncMock(side_effect=["up", "up", "up", "up", "up", "up", "up", "up"]),
+        AsyncMock(side_effect=["up", "up", "up", "up", "up", "up", "up"]),
     )
 
     with TestClient(main_module.app) as client:
@@ -267,7 +266,6 @@ def test_main_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         "yolo_model": "up",
         "chromadb": "up",
         "ollama_embedding": "up",
-        "ocr_local_runtime": "up",
         "ocr_remote_api": "up",
     }
     assert "X-Request-ID" in response.headers
@@ -289,7 +287,7 @@ def test_main_health_endpoint_supports_request_id_and_hsts(
     monkeypatch.setattr(
         main_module,
         "_run_with_timeout",
-        AsyncMock(side_effect=["down", "up", "up", "up", "up", "up", "up", "up"]),
+        AsyncMock(side_effect=["down", "up", "up", "up", "up", "up", "up"]),
     )
 
     with TestClient(main_module.app, base_url="https://testserver") as client:
@@ -374,44 +372,15 @@ def test_probe_remote_ocr_runtime_rejects_server_errors(
         asyncio.run(main_module._probe_remote_ocr_runtime())
 
 
-def test_probe_local_ocr_runtime_uses_local_runtime_probe_when_local_mode(
+def test_probe_remote_ocr_runtime_returns_disabled_when_external_checks_are_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _load_required_env(
         monkeypatch,
         SKIP_STARTUP_CHECKS="true",
-        PADDLEOCR_MODE="local",
-    )
-    main_module = importlib.import_module("app.main")
-    main_module = importlib.reload(main_module)
-    calls: list[str] = []
-
-    def fake_ensure_local_runtime_available(preference: str) -> str:
-        calls.append(preference)
-        return "gpu"
-
-    monkeypatch.setattr(
-        "app.workers.ocr.local_engine.ensure_local_runtime_available",
-        fake_ensure_local_runtime_available,
-    )
-
-    result = asyncio.run(main_module._probe_local_ocr_runtime())
-
-    assert result is None
-    assert calls == ["auto"]
-
-
-def test_probe_ocr_runtime_returns_disabled_for_skipped_channels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _load_required_env(
-        monkeypatch,
-        SKIP_STARTUP_CHECKS="true",
-        PADDLEOCR_MODE="remote",
         HEALTH_CHECK_EXTERNAL="false",
     )
     main_module = importlib.import_module("app.main")
     main_module = importlib.reload(main_module)
 
-    assert asyncio.run(main_module._probe_local_ocr_runtime()) == "disabled"
     assert asyncio.run(main_module._probe_remote_ocr_runtime()) == "disabled"

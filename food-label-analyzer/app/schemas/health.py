@@ -34,9 +34,6 @@ class HealthServicesSchema(_HealthSchema):
     ollama_embedding: ServiceState = Field(
         description="Ollama embedding service availability", examples=["up"]
     )
-    ocr_local_runtime: ServiceState = Field(
-        description="Local PaddleOCR runtime availability", examples=["up"]
-    )
     ocr_remote_api: ServiceState = Field(
         description="Remote PaddleOCR API availability", examples=["up", "disabled"]
     )

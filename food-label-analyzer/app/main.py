@@ -60,8 +60,6 @@ def _build_config_summary(current_settings: Settings) -> dict[str, str | bool]:
         "minio_endpoint": current_settings.MINIO_ENDPOINT,
         "deepseek_model": current_settings.DEEPSEEK_MODEL,
         "ollama_base_url": current_settings.OLLAMA_BASE_URL,
-        "paddleocr_mode": current_settings.PADDLEOCR_MODE,
-        "paddleocr_device": current_settings.PADDLEOCR_DEVICE,
         "chromadb_path": current_settings.CHROMADB_PATH,
         "yolo_model_path": current_settings.YOLO_MODEL_PATH,
         "log_level": current_settings.LOG_LEVEL,
@@ -183,19 +181,6 @@ async def _probe_ollama_embedding() -> None:
         response.raise_for_status()
 
 
-async def _probe_local_ocr_runtime() -> str | None:
-    current_settings = get_settings()
-    if current_settings.PADDLEOCR_MODE != "local":
-        return "disabled"
-
-    from app.workers.ocr.local_engine import ensure_local_runtime_available
-
-    await asyncio.to_thread(
-        ensure_local_runtime_available, current_settings.PADDLEOCR_DEVICE
-    )
-    return None
-
-
 async def _probe_remote_ocr_runtime() -> str | None:
     current_settings = get_settings()
     if not current_settings.HEALTH_CHECK_EXTERNAL:
@@ -228,9 +213,6 @@ async def _build_health_payload() -> HealthCheckResponse:
         chromadb=await _run_with_timeout("chromadb", _probe_chromadb),
         ollama_embedding=await _run_with_timeout(
             "ollama_embedding", _probe_ollama_embedding
-        ),
-        ocr_local_runtime=await _run_with_timeout(
-            "ocr_local_runtime", _probe_local_ocr_runtime
         ),
         ocr_remote_api=await _run_with_timeout(
             "ocr_remote_api", _probe_remote_ocr_runtime

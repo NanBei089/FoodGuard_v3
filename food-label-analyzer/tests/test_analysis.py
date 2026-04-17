@@ -640,6 +640,8 @@ def test_process_image_task_retries_retryable_errors(
         importlib.import_module("app.tasks.analysis_task")
     )
     statuses: list[tuple[TaskStatus, str | None]] = []
+    metric_calls: list[dict[str, object]] = []
+    dependency_errors: list[dict[str, str]] = []
 
     class RetryTriggered(Exception):
         pass
@@ -653,6 +655,16 @@ def test_process_image_task_retries_retryable_errors(
         raise RetryTriggered()
 
     monkeypatch.setattr(analysis_task_module, "_update_task_status", fake_update)
+    monkeypatch.setattr(
+        analysis_task_module,
+        "record_analysis_task_metrics",
+        lambda **kwargs: metric_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "record_external_dependency_error",
+        lambda **kwargs: dependency_errors.append(kwargs),
+    )
     monkeypatch.setattr(
         analysis_task_module,
         "_download_image",
@@ -671,6 +683,14 @@ def test_process_image_task_retries_retryable_errors(
         analysis_task_module.process_image_task.pop_request()
 
     assert statuses == [(TaskStatus.PROCESSING, None)]
+    assert metric_calls and metric_calls[0]["status"] == "retrying"
+    assert dependency_errors == [
+        {
+            "service": "storage",
+            "operation": "process_image_task",
+            "error_type": "StorageServiceError",
+        }
+    ]
 
 
 def test_process_image_task_marks_failed_for_invalid_payload_shape(
@@ -860,6 +880,119 @@ def test_process_image_task_completes_with_report_payload(
     assert completions[0]["artifact_urls"] == {
         "ocr_full_json_url": "https://example.com/ocr.json"
     }
+
+
+def test_process_image_task_records_metrics_for_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    metric_calls: list[dict[str, object]] = []
+    dependency_errors: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        analysis_task_module, "_update_task_status", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "record_analysis_task_metrics",
+        lambda **kwargs: metric_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "record_external_dependency_error",
+        lambda **kwargs: dependency_errors.append(kwargs),
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_download_image", lambda image_key: b"img"
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker, "detect", lambda image_bytes: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_full_text",
+        lambda image_bytes: OCRTextResult(
+            raw_text="salt, sugar",
+            lines=[{"text": "salt, sugar"}],
+            blocks=[],
+            artifact_json_url="https://example.com/ocr.json",
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_run_ocr_table",
+        lambda image_bytes: TableRecognitionResult(
+            table_json={"rows": [["item", "per100g"], ["energy", "120kJ"]]},
+            ocr_fallback_text="energy 120kJ",
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.nutrition_extractor,
+        "parse",
+        lambda table_result, ocr_fallback_text=None: {
+            "items": [],
+            "parse_method": "ocr_text",
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ingredient_extractor,
+        "extract",
+        lambda full_raw_text: (["salt", "sugar"], "salt, sugar"),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.rag_worker,
+        "retrieve_all",
+        lambda ingredient_terms, ingredients_text: {
+            "source_file": "chromadb",
+            "ingredients_text": ingredients_text,
+            "items_total": 0,
+            "retrieval_results": [],
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module.llm_worker,
+        "analyze",
+        lambda other_ocr_raw_text, nutrition_json, rag_results_json: {
+            "score": 88,
+            "summary": "S" * 60,
+            "top_risks": ["salt"],
+            "ingredients": [],
+            "health_advice": _health_advice_payload(),
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_persist_analysis_artifacts",
+        lambda **kwargs: {"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_complete_task_with_report", lambda **kwargs: None
+    )
+
+    analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
+    try:
+        result = analysis_task_module.process_image_task.run(
+            "task-id", "image-key", str(uuid.uuid4())
+        )
+    finally:
+        analysis_task_module.process_image_task.pop_request()
+
+    assert result["status"] == "completed"
+    assert metric_calls and metric_calls[0]["status"] == "completed"
+    assert metric_calls[0]["total_elapsed_ms"] >= 0
+    assert set(metric_calls[0]["timings"].keys()) >= {
+        "download_ms",
+        "yolo_ms",
+        "ocr_ms",
+        "nutrition_ms",
+        "ingredients_ms",
+        "rag_ms",
+        "llm_ms",
+    }
+    assert dependency_errors == []
 
 
 def test_process_image_task_runs_parallel_ocr_when_yolo_succeeds(

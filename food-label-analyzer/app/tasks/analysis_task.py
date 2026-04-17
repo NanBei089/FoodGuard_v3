@@ -13,6 +13,10 @@ from app.core.errors import (
     OCRServiceError,
     StorageServiceError,
 )
+from app.core.metrics import (
+    record_analysis_task_metrics,
+    record_external_dependency_error,
+)
 from app.models.analysis_task import TaskStatus
 from app.tasks.analysis.artifacts import _persist_analysis_artifacts
 from app.tasks.analysis.ingredient_fallback import _ensure_ingredient_coverage
@@ -92,6 +96,43 @@ def _extract_score(llm_output_json: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         score = 0
     return max(0, min(100, score))
+
+
+def _elapsed_ms_since(started_at: float) -> int:
+    return int((perf_counter() - started_at) * 1000)
+
+
+def _record_task_attempt_metrics(
+    *,
+    status: str,
+    started_at: float,
+    timings: dict[str, int],
+) -> None:
+    record_analysis_task_metrics(
+        status=status,
+        total_elapsed_ms=_elapsed_ms_since(started_at),
+        timings=timings,
+    )
+
+
+def _record_retryable_dependency_error(exc: Exception, *, operation: str) -> None:
+    if isinstance(exc, OCRServiceError):
+        service = "ocr"
+    elif isinstance(exc, LLMServiceError):
+        service = "llm"
+    elif isinstance(exc, StorageServiceError):
+        service = "storage"
+    elif isinstance(exc, EmbeddingServiceError):
+        service = "embedding"
+    else:
+        return
+
+    record_external_dependency_error(
+        service=service,
+        operation=operation,
+        error_type=type(exc).__name__,
+    )
+
 
 def _run_rag(ingredient_terms: list[str], ingredients_text: str) -> dict[str, Any]:
     try:
@@ -177,6 +218,11 @@ def process_image_task(
             try:
                 table_result = _run_ocr_table(image_bytes)
             except OCRServiceError as exc:
+                record_external_dependency_error(
+                    service="ocr",
+                    operation="nutrition_table_full_image_scan",
+                    error_type=type(exc).__name__,
+                )
                 logger.warning(
                     "nutrition_table_full_image_scan_failed",
                     task_id=task_id,
@@ -246,7 +292,12 @@ def process_image_task(
                 llm_output_json=llm_output_json,
             ),
         )
-        total_elapsed_ms = int((perf_counter() - started_at) * 1000)
+        total_elapsed_ms = _elapsed_ms_since(started_at)
+        _record_task_attempt_metrics(
+            status=TaskStatus.COMPLETED.value,
+            started_at=started_at,
+            timings=timings,
+        )
         logger.info(
             "analysis_task_completed",
             task_id=task_id,
@@ -261,6 +312,11 @@ def process_image_task(
     except SoftTimeLimitExceeded:
         error_message = "Analysis timeout"
         _update_task_status(task_id, TaskStatus.FAILED, error_message)
+        _record_task_attempt_metrics(
+            status="timeout",
+            started_at=started_at,
+            timings=timings,
+        )
         logger.warning("analysis_task_timeout", task_id=task_id, timings=timings)
         return {"task_id": task_id, "status": TaskStatus.FAILED.value}
     except (
@@ -269,7 +325,13 @@ def process_image_task(
         StorageServiceError,
         EmbeddingServiceError,
     ) as exc:
+        _record_retryable_dependency_error(exc, operation="process_image_task")
         if self.request.retries < self.max_retries:
+            _record_task_attempt_metrics(
+                status="retrying",
+                started_at=started_at,
+                timings=timings,
+            )
             logger.warning(
                 "analysis_task_retrying",
                 task_id=task_id,
@@ -279,6 +341,11 @@ def process_image_task(
             )
             raise self.retry(exc=exc, countdown=10)
         _update_task_status(task_id, TaskStatus.FAILED, str(exc))
+        _record_task_attempt_metrics(
+            status=TaskStatus.FAILED.value,
+            started_at=started_at,
+            timings=timings,
+        )
         logger.warning(
             "analysis_task_failed_after_retries",
             task_id=task_id,
@@ -288,12 +355,22 @@ def process_image_task(
         return {"task_id": task_id, "status": TaskStatus.FAILED.value}
     except NotImplementedError as exc:
         _update_task_status(task_id, TaskStatus.FAILED, str(exc))
+        _record_task_attempt_metrics(
+            status="not_implemented",
+            started_at=started_at,
+            timings=timings,
+        )
         logger.warning(
             "analysis_task_not_implemented", task_id=task_id, error_message=str(exc)
         )
         return {"task_id": task_id, "status": TaskStatus.FAILED.value}
     except Exception as exc:
         _update_task_status(task_id, TaskStatus.FAILED, _INTERNAL_ANALYSIS_ERROR_MESSAGE)
+        _record_task_attempt_metrics(
+            status="unexpected_failure",
+            started_at=started_at,
+            timings=timings,
+        )
         logger.exception(
             "analysis_task_unexpected_failure",
             task_id=task_id,

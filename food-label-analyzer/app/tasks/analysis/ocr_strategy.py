@@ -5,6 +5,7 @@ from typing import Any
 import structlog
 
 from app.core.errors import OCRServiceError
+from app.core.metrics import record_external_dependency_error
 from app.workers import ocr_worker
 from app.workers.ocr_worker import OCRParallelResult, OCRTextResult, TableRecognitionResult
 
@@ -37,6 +38,11 @@ def _run_ocr_with_bbox_fallback(
         parallel_result = _run_ocr_parallel(masked_full_image, cropped_image)
         return parallel_result.full_text, parallel_result.nutrition_table
     except OCRServiceError as exc:
+        record_external_dependency_error(
+            service="ocr",
+            operation="parallel_fallback",
+            error_type=type(exc).__name__,
+        )
         logger.warning(
             "parallel_ocr_fallback_to_sequential",
             task_id=task_id,
@@ -50,6 +56,11 @@ def _run_ocr_with_bbox_fallback(
     try:
         table_result = _run_ocr_table(cropped_image)
     except OCRServiceError as exc:
+        record_external_dependency_error(
+            service="ocr",
+            operation="cropped_table_scan",
+            error_type=type(exc).__name__,
+        )
         logger.warning(
             "nutrition_table_cropped_scan_failed",
             task_id=task_id,
@@ -64,6 +75,11 @@ def _run_ocr_with_bbox_fallback(
         try:
             full_image_table_result = _run_ocr_table(image_bytes)
         except OCRServiceError as exc:
+            record_external_dependency_error(
+                service="ocr",
+                operation="full_image_table_fallback",
+                error_type=type(exc).__name__,
+            )
             logger.warning(
                 "nutrition_table_full_image_fallback_failed",
                 task_id=task_id,

@@ -17,6 +17,7 @@ def test_openapi_routes_expose_summary_description_and_responses(monkeypatch) ->
     ]
     auth_login = schema["paths"]["/api/v1/auth/login"]["post"]
     analysis_upload = schema["paths"]["/api/v1/analysis/upload"]["post"]
+    metrics_get = schema["paths"]["/api/v1/metrics"]["get"]
 
     assert isinstance(report_detail.get("summary"), str) and report_detail["summary"]
     assert (
@@ -53,6 +54,10 @@ def test_openapi_routes_expose_summary_description_and_responses(monkeypatch) ->
         "422",
     }
 
+    assert isinstance(metrics_get.get("summary"), str) and metrics_get["summary"]
+    assert isinstance(metrics_get.get("description"), str) and metrics_get["description"]
+    assert set(metrics_get["responses"].keys()) >= {"200", "401"}
+
 
 def test_openapi_schemas_expose_field_metadata_and_new_report_shape(
     monkeypatch,
@@ -66,12 +71,14 @@ def test_openapi_schemas_expose_field_metadata_and_new_report_shape(
     ]
     auth_schema = schema["components"]["schemas"]["RegisterRequest"]
     analysis_schema = schema["components"]["schemas"]["ApiResponse_TaskStatusResponse_"]
+    metrics_schema = schema["components"]["schemas"]["ApiResponse_MetricsSnapshotResponse_"]
 
     assert set(report_detail_schema["properties"].keys()) >= {"code", "message", "data"}
 
     assert auth_schema["properties"]["email"]["description"]
     assert auth_schema["properties"]["code"]["examples"] == ["123456"]
     assert set(analysis_schema["properties"].keys()) >= {"code", "message", "data"}
+    assert set(metrics_schema["properties"].keys()) >= {"code", "message", "data"}
 
 
 def test_docs_and_redoc_are_hidden_outside_development(monkeypatch) -> None:

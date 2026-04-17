@@ -11,6 +11,7 @@ import structlog
 
 from app.core.config import get_settings
 from app.core.errors import EmbeddingServiceError
+from app.core.metrics import record_external_dependency_error
 
 logger = structlog.get_logger(__name__)
 _HTTP_CLIENT: httpx.Client | None = None
@@ -248,6 +249,8 @@ def _query_collection_by_embeddings(
     collection_getter: Any,
     embeddings: list[list[float]],
     top_k: int,
+    *,
+    collection_name: str,
 ) -> list[list[dict[str, Any]]]:
     if not embeddings:
         return []
@@ -255,6 +258,11 @@ def _query_collection_by_embeddings(
     try:
         collection = collection_getter()
     except ChromaError as exc:
+        record_external_dependency_error(
+            service="chromadb",
+            operation=f"{collection_name}.get_collection",
+            error_type=type(exc).__name__,
+        )
         logger.warning("chroma_collection_not_found", error=str(exc))
         return _empty_query_batch(len(embeddings))
 
@@ -265,6 +273,11 @@ def _query_collection_by_embeddings(
             include=["documents", "metadatas", "distances"],
         )
     except ChromaError as exc:
+        record_external_dependency_error(
+            service="chromadb",
+            operation=f"{collection_name}.query",
+            error_type=type(exc).__name__,
+        )
         logger.warning("chroma_query_failed", error=str(exc))
         return _empty_query_batch(len(embeddings))
 
@@ -337,6 +350,11 @@ def warmup() -> None:
     try:
         _embed("食品配料")
     except EmbeddingServiceError as exc:
+        record_external_dependency_error(
+            service="embedding",
+            operation="warmup",
+            error_type=type(exc).__name__,
+        )
         logger.warning("rag_embedding_warmup_failed", error=str(exc))
 
 
@@ -347,6 +365,11 @@ def retrieve_all_ingredients(query_text: str, top_k: int = 5) -> list[dict[str, 
     try:
         query_embeddings = _embed_batch([query_text])
     except EmbeddingServiceError as exc:
+        record_external_dependency_error(
+            service="embedding",
+            operation="retrieve_all_ingredients.embed",
+            error_type=type(exc).__name__,
+        )
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 
@@ -354,6 +377,7 @@ def retrieve_all_ingredients(query_text: str, top_k: int = 5) -> list[dict[str, 
         _get_ingredients_collection,
         query_embeddings,
         top_k,
+        collection_name="ingredients",
     )
     return results[0] if results else []
 
@@ -365,6 +389,11 @@ def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]
     try:
         query_embeddings = _embed_batch([keyword])
     except EmbeddingServiceError as exc:
+        record_external_dependency_error(
+            service="embedding",
+            operation="query_gb2760_by_keyword.embed",
+            error_type=type(exc).__name__,
+        )
         logger.warning("chroma_query_failed", error=str(exc))
         return []
 
@@ -372,6 +401,7 @@ def query_gb2760_by_keyword(keyword: str, top_k: int = 3) -> list[dict[str, Any]
         _get_standards_collection,
         query_embeddings,
         top_k,
+        collection_name="standards",
     )
     return results[0] if results else []
 
@@ -402,6 +432,11 @@ def retrieve_all(
         try:
             query_embeddings = _embed_batch(normalized_terms)
         except EmbeddingServiceError as exc:
+            record_external_dependency_error(
+                service="embedding",
+                operation="retrieve_all.embed_batch",
+                error_type=type(exc).__name__,
+            )
             logger.warning("rag_embedding_batch_failed", error=str(exc))
             retrieval_items = [
                 _build_retrieval_item(term, []) for term in normalized_terms
@@ -411,11 +446,13 @@ def retrieve_all(
                 _get_ingredients_collection,
                 query_embeddings,
                 top_k_ingredients,
+                collection_name="ingredients",
             )
             standard_results = _query_collection_by_embeddings(
                 _get_standards_collection,
                 query_embeddings,
                 top_k_per_term,
+                collection_name="standards",
             )
             for index, term in enumerate(normalized_terms):
                 retrieval_items.append(

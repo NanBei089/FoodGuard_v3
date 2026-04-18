@@ -4,7 +4,7 @@ import { apiGet, apiPatch, apiPost, apiPut } from '@/api/client';
 import { ChangePasswordForm } from '@/components/profile/ChangePasswordForm';
 import { PreferencesSection } from '@/components/profile/PreferencesSection';
 import { ProfileForm } from '@/components/profile/ProfileForm';
-import { clearPersistedTokens } from '@/lib/auth-session';
+import { performManualLogout } from '@/lib/auth-session';
 import { extractApiErrorDetails, getErrorMessage } from '@/lib/api-errors';
 import { getUserInitial } from '@/lib/foodguard';
 import { useAuthStore } from '@/store/auth';
@@ -209,10 +209,11 @@ export default function Profile() {
     }
   };
 
-  const handleLogout = () => {
-    clearPersistedTokens();
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    await performManualLogout({
+      onLocalLogout: logout,
+      onAfterLogout: () => navigate('/login'),
+    });
   };
 
   const activePreferenceCount =
@@ -264,7 +265,9 @@ export default function Profile() {
             clearPasswordFieldError('confirmNewPassword');
           }}
           onSubmit={handleChangePassword}
-          onLogout={handleLogout}
+          onLogout={() => {
+            void handleLogout();
+          }}
         />
       </aside>
 

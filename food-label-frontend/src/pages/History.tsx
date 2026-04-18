@@ -62,8 +62,8 @@ export default function History() {
   };
 
   useEffect(() => {
-    fetchReports(page);
-  }, [page]);
+    void fetchReports(1);
+  }, []);
 
   const handleDelete = async (id: string, event: React.MouseEvent) => {
     event.preventDefault();
@@ -76,8 +76,7 @@ export default function History() {
     try {
       const res = await apiDelete<null>(`/reports/${id}`);
       if (res.code === 0) {
-        setReports((current) => current.filter((item) => item.report_id !== id));
-        setTotal((current) => Math.max(0, current - 1));
+        await fetchReports(page);
       } else {
         setError(res.message || '删除失败');
       }
@@ -109,7 +108,12 @@ export default function History() {
           <AlertCircle className="h-5 w-5" />
           {error}
         </div>
-        <Button onClick={() => fetchReports(page)} variant="outline">
+        <Button
+          onClick={() => {
+            void fetchReports(page);
+          }}
+          variant="outline"
+        >
           重试
         </Button>
       </div>
@@ -260,7 +264,9 @@ export default function History() {
                 <button
                   type="button"
                   disabled={page === 1}
-                  onClick={() => setPage((current) => current - 1)}
+                  onClick={() => {
+                    void fetchReports(page - 1);
+                  }}
                   className="rounded-lg border border-slate-200 p-1.5 text-slate-400 transition-colors hover:bg-white disabled:opacity-50"
                 >
                   <ChevronLeft className="h-5 w-5" />
@@ -271,7 +277,9 @@ export default function History() {
                 <button
                   type="button"
                   disabled={page * pageSize >= total}
-                  onClick={() => setPage((current) => current + 1)}
+                  onClick={() => {
+                    void fetchReports(page + 1);
+                  }}
                   className="rounded-lg border border-slate-200 p-1.5 text-slate-600 transition-colors hover:bg-white disabled:opacity-50"
                 >
                   <ChevronRight className="h-5 w-5" />

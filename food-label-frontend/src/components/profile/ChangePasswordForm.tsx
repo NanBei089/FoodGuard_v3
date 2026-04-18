@@ -14,7 +14,7 @@ interface ChangePasswordFormProps {
   onNewPasswordChange: (value: string) => void;
   onConfirmNewPasswordChange: (value: string) => void;
   onSubmit: (event: React.FormEvent) => void;
-  onLogout: () => void;
+  onLogout: () => void | Promise<void>;
 }
 
 export function ChangePasswordForm({

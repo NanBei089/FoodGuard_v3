@@ -1,4 +1,4 @@
-import { apiGet } from '@/api/client';
+import { apiGet, getApiBaseUrl } from '@/api/client';
 import type { TokenResponse, User, UserPreferences } from '@/types/auth';
 
 export const emptyPreferences = (): UserPreferences => ({
@@ -28,6 +28,35 @@ export const clearPersistedTokens = (): void => {
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
 };
+
+export async function performManualLogout({
+  onLocalLogout,
+  onAfterLogout,
+}: {
+  onLocalLogout: () => void;
+  onAfterLogout?: () => void;
+}): Promise<void> {
+  const refreshToken = localStorage.getItem('refresh_token');
+
+  if (refreshToken) {
+    try {
+      await fetch(`${getApiBaseUrl()}/auth/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          refresh_token: refreshToken,
+        }),
+      });
+    } catch {
+      // Manual logout uses best-effort server-side revocation only.
+    }
+  }
+
+  onLocalLogout();
+  onAfterLogout?.();
+}
 
 export async function fetchSessionContext(): Promise<{
   user: User;

@@ -1,25 +1,27 @@
 # FoodGuard
 
-FoodGuard 是一个面向预包装食品标签场景的智能分析系统。项目通过图像识别、OCR、配料提取、营养成分解析和大模型推理，对食品标签进行结构化分析，并生成更易理解的健康报告。
+FoodGuard 是一个面向预包装食品标签场景的智能分析系统。项目通过图像识别、OCR、配料提取、营养成分解析、知识检索和大模型推理，对食品标签进行结构化分析，并生成更易理解的健康报告。
 
 ## 功能概览
 
-- 上传食品标签图片并创建分析任务
+- 上传食品标签图片并创建异步分析任务
 - 自动识别配料表与营养成分表
-- 提取关键配料、营养数据和潜在风险点
-- 结合知识检索与大模型生成健康解读
-- 输出健康评分、风险摘要和人群建议
-- 支持历史报告查看、删除和用户偏好管理
+- 结合用户偏好输出个性化健康评分、风险摘要和建议
+- 支持历史报告查看、删除与再次追溯
+- 支持报告级问答与快捷追问
+- 提供账号注册、登录、偏好设置、密码修改等基础用户能力
 
-## 项目结构
+## 仓库结构
 
 ```text
 FoodGuard/
-├─ food-label-analyzer/    FastAPI 后端服务
-├─ food-label-frontend/    React 前端应用
-├─ images/                 样例图片
-├─ docs/                   项目说明文档
-└─ output/                 调试与自动化输出
+├─ food-label-analyzer/     FastAPI 后端服务
+├─ food-label-frontend/     React 前端应用
+├─ docs/                    项目深度说明文档
+├─ images/                  演示与联调图片样例
+├─ output/                  调试输出目录
+├─ AGENTS.md                仓库协作约束
+└─ README.md
 ```
 
 ## 技术栈
@@ -27,33 +29,34 @@ FoodGuard/
 后端：
 
 - FastAPI
-- SQLAlchemy
+- SQLAlchemy + Alembic
 - PostgreSQL
-- Redis
+- Redis + Celery
 - MinIO
 - ChromaDB
 - YOLO / PaddleOCR / Ollama / DeepSeek
 
 前端：
 
-- React
+- React 19
 - TypeScript
 - Vite
 - React Router
 - Zustand
 - Axios
 - Tailwind CSS
+- Vitest + Testing Library
 
-## 快速开始
+## 快速启动
 
-### 后端
+### 1. 后端
 
 ```powershell
 conda activate foodguard-env
 cd food-label-analyzer
 pip install -r requirements-dev.txt
 Copy-Item .env.example .env
-$env:SKIP_STARTUP_CHECKS="true"
+python -m alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
@@ -61,8 +64,17 @@ uvicorn app.main:app --reload
 
 - API: `http://localhost:8000`
 - Swagger: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
 
-### 前端
+### 2. Celery Worker
+
+```powershell
+conda activate foodguard-env
+cd food-label-analyzer
+celery -A app.tasks.celery_app.celery_app worker -Q analysis --loglevel=info
+```
+
+### 3. 前端
 
 ```powershell
 cd food-label-frontend
@@ -74,7 +86,7 @@ npm run dev
 
 - Web: `http://localhost:5173`
 
-开发环境下，前端会将 `/api` 代理到本地后端。
+开发环境下，Vite 会把 `/api` 代理到本地后端。
 
 ## 常用命令
 
@@ -82,21 +94,14 @@ npm run dev
 
 ```powershell
 cd food-label-analyzer
-python -m pytest
+conda run -n foodguard-env python -m pytest
 ```
 
-后端聚焦测试：
-
-```powershell
-cd food-label-analyzer
-python -m pytest tests/test_config.py tests/test_core_modules.py tests/test_infra_modules.py
-```
-
-前端构建：
+前端测试：
 
 ```powershell
 cd food-label-frontend
-npm run build
+npm test
 ```
 
 前端静态检查：
@@ -106,27 +111,12 @@ cd food-label-frontend
 npm run lint
 ```
 
-## 核心目录说明
+前端生产构建：
 
-### `food-label-analyzer/`
-
-- `app/api/v1/`: API 路由
-- `app/core/`: 配置、日志、安全、错误处理
-- `app/db/`: 数据库与 Redis 封装
-- `app/models/`: ORM 模型
-- `app/schemas/`: 请求与响应模型
-- `app/services/`: 服务层逻辑
-- `app/tasks/`: 异步任务入口
-- `app/workers/`: OCR、YOLO、提取器、RAG、LLM 等分析模块
-- `tests/`: 后端测试
-
-### `food-label-frontend/`
-
-- `src/pages/`: 登录、注册、首页、历史记录、报告详情、个人资料等页面
-- `src/components/`: 通用组件与布局组件
-- `src/api/`: 前端接口封装
-- `src/store/`: 状态管理
-- `src/lib/`: 业务辅助函数
+```powershell
+cd food-label-frontend
+npm run build
+```
 
 ## 文档入口
 
@@ -137,8 +127,8 @@ npm run lint
 - [后端深度说明](docs/backend-codebase-deep-dive.md)
 - [前端深度说明](docs/frontend-codebase-deep-dive.md)
 
-## 说明
+## 运行说明
 
-- `images/` 目录提供了适合本地联调和演示的食品标签样例图
-- 完整分析链路依赖数据库、对象存储、缓存、模型文件和 OCR 相关服务
-- 配置项请以 `food-label-analyzer/.env.example` 为准
+- 完整分析链路依赖 PostgreSQL、Redis、MinIO、PaddleOCR 远程服务、Ollama、ChromaDB 和 DeepSeek。
+- 若只做前后端页面联调，可把后端 `.env` 中的 `SKIP_STARTUP_CHECKS` 设为 `true`，避免启动时阻塞在依赖探活。
+- `images/` 目录可用于本地演示与答辩准备。

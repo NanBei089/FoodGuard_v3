@@ -128,6 +128,7 @@ def test_derived_properties_are_computed_correctly(
         "http://localhost:3000",
         "http://localhost:5173",
     ]
+    assert settings.prometheus_multiproc_enabled is False
 
 
 def test_cors_origins_list_supports_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,6 +137,16 @@ def test_cors_origins_list_supports_wildcard(monkeypatch: pytest.MonkeyPatch) ->
     settings = Settings()
 
     assert settings.cors_origins_list == ["*"]
+
+
+def test_prometheus_multiproc_enabled_when_directory_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch, PROMETHEUS_MULTIPROC_DIR="./.prometheus")
+
+    settings = Settings()
+
+    assert settings.prometheus_multiproc_enabled is True
 
 
 @pytest.mark.parametrize(
@@ -200,3 +211,4 @@ def test_env_example_contains_expected_defaults() -> None:
     assert env_values["USER_MAX_CONCURRENT_TASKS"] == "3"
     assert env_values["YOLO_INPUT_SIZE"] == "640"
     assert env_values["DEEPSEEK_MAX_RETRIES"] == "2"
+    assert env_values["PROMETHEUS_MULTIPROC_DIR"] == ""

@@ -143,6 +143,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "console"
     SENTRY_DSN: str = ""
+    PROMETHEUS_MULTIPROC_DIR: str = ""
 
     @property
     def is_development(self) -> bool:
@@ -180,6 +181,10 @@ class Settings(BaseSettings):
         if self.CORS_ORIGINS.strip() == "*":
             return ["*"]
         return [item.strip() for item in self.CORS_ORIGINS.split(",") if item.strip()]
+
+    @property
+    def prometheus_multiproc_enabled(self) -> bool:
+        return bool(self.PROMETHEUS_MULTIPROC_DIR.strip())
 
     @field_validator("APP_SECRET_KEY")
     @classmethod

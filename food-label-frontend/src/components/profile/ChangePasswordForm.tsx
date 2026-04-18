@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 
 interface ChangePasswordFormProps {
+  accountEmail: string;
   currentPassword: string;
   newPassword: string;
   confirmNewPassword: string;
@@ -17,6 +18,7 @@ interface ChangePasswordFormProps {
 }
 
 export function ChangePasswordForm({
+  accountEmail,
   currentPassword,
   newPassword,
   confirmNewPassword,
@@ -44,6 +46,16 @@ export function ChangePasswordForm({
             修改后会立即更新账号密码，后续登录请使用新密码。
           </p>
           <form className="space-y-3" onSubmit={onSubmit}>
+            <input
+              type="email"
+              name="profile-password-username"
+              autoComplete="username"
+              value={accountEmail}
+              readOnly
+              tabIndex={-1}
+              aria-hidden="true"
+              className="sr-only"
+            />
             {passwordMessage && (
               <div
                 className={`rounded-xl px-3 py-2 text-sm ${
@@ -61,6 +73,7 @@ export function ChangePasswordForm({
               placeholder="请输入当前密码"
               value={currentPassword}
               error={passwordErrors.current_password}
+              autoComplete="current-password"
               onChange={onCurrentPasswordChange}
             />
             <PasswordField
@@ -68,6 +81,7 @@ export function ChangePasswordForm({
               placeholder="8-32 位，需包含大写字母、小写字母和数字"
               value={newPassword}
               error={passwordErrors.new_password}
+              autoComplete="new-password"
               onChange={onNewPasswordChange}
             />
             <PasswordField
@@ -75,6 +89,7 @@ export function ChangePasswordForm({
               placeholder="请再次输入新密码"
               value={confirmNewPassword}
               error={passwordErrors.confirmNewPassword}
+              autoComplete="new-password"
               onChange={onConfirmNewPasswordChange}
             />
 
@@ -111,12 +126,14 @@ function PasswordField({
   placeholder,
   value,
   error,
+  autoComplete,
   onChange,
 }: {
   label: string;
   placeholder: string;
   value: string;
   error?: string;
+  autoComplete: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -129,6 +146,7 @@ function PasswordField({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
+          autoComplete={autoComplete}
           className="bg-slate-50 pl-10 focus:bg-white"
           error={error}
           required

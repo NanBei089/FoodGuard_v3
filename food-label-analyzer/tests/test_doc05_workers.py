@@ -1296,6 +1296,11 @@ def test_celery_worker_init_configures_prefork_without_warmup(
         celery_module, "setup_logging", lambda level, fmt: calls.append("logging")
     )
     monkeypatch.setattr(
+        celery_module,
+        "prepare_prometheus_storage",
+        lambda: calls.append("prom") or None,
+    )
+    monkeypatch.setattr(
         celery_module.yolo_worker, "warmup", lambda: calls.append("yolo")
     )
     monkeypatch.setattr(celery_module.ocr_worker, "warmup", lambda: calls.append("ocr"))
@@ -1306,7 +1311,7 @@ def test_celery_worker_init_configures_prefork_without_warmup(
 
     celery_module.on_worker_init()
 
-    assert calls == ["logging", "llm"]
+    assert calls == ["logging", "prom", "llm"]
 
 
 def test_celery_worker_process_init_warms_prefork_child(
@@ -1340,6 +1345,11 @@ def test_celery_worker_init_warms_windows_solo_worker(
         celery_module, "setup_logging", lambda level, fmt: calls.append("logging")
     )
     monkeypatch.setattr(
+        celery_module,
+        "prepare_prometheus_storage",
+        lambda: calls.append("prom") or None,
+    )
+    monkeypatch.setattr(
         celery_module.yolo_worker, "warmup", lambda: calls.append("yolo")
     )
     monkeypatch.setattr(celery_module.ocr_worker, "warmup", lambda: calls.append("ocr"))
@@ -1350,7 +1360,7 @@ def test_celery_worker_init_warms_windows_solo_worker(
 
     celery_module.on_worker_init()
 
-    assert calls == ["logging", "llm", "yolo", "ocr", "rag"]
+    assert calls == ["logging", "prom", "llm", "yolo", "ocr", "rag"]
 
 
 def test_celery_worker_warmup_guard_skips_same_pid(
@@ -1390,3 +1400,20 @@ def test_celery_worker_init_does_not_raise_on_nonfatal_warmup(
     )
 
     celery_module._warmup_worker_resources()
+
+
+def test_celery_worker_process_shutdown_marks_prometheus_process_dead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    celery_module = importlib.reload(importlib.import_module("app.tasks.celery_app"))
+    dead_pids: list[int] = []
+    monkeypatch.setattr(
+        celery_module,
+        "mark_prometheus_process_dead",
+        lambda pid=None: dead_pids.append(pid),
+    )
+
+    celery_module.on_worker_process_shutdown(pid=4321)
+
+    assert dead_pids == [4321]

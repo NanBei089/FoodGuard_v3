@@ -85,6 +85,7 @@ export default function Login() {
                 id="login-email"
                 name="login-email"
                 type="email"
+                autoComplete="username"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="请输入你的邮箱"
@@ -104,6 +105,7 @@ export default function Login() {
                 id="login-password"
                 name="login-password"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="请输入密码"

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import importlib
+import shutil
+import sys
+import tempfile
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from prometheus_client.parser import text_string_to_metric_families
 
 from app.core.error_handlers import register_exception_handlers
 from app.core.errors import EmbeddingServiceError, OCRServiceError
@@ -15,10 +19,13 @@ from tests.conftest import load_required_env
 
 @pytest.fixture(autouse=True)
 def reset_metrics_state() -> None:
-    metrics_module = importlib.import_module("app.core.metrics")
-    metrics_module.reset_metrics_for_tests()
+    metrics_module = sys.modules.get("app.core.metrics")
+    if metrics_module is not None:
+        metrics_module.reset_metrics_for_tests()
     yield
-    metrics_module.reset_metrics_for_tests()
+    metrics_module = sys.modules.get("app.core.metrics")
+    if metrics_module is not None:
+        metrics_module.reset_metrics_for_tests()
 
 
 def test_metrics_snapshot_records_histograms_percentiles_and_counters(
@@ -99,6 +106,81 @@ def test_metrics_endpoint_returns_current_process_snapshot(
     assert payload["data"]["counters"]["analysis_task.status"] == [
         {"labels": {"status": "completed"}, "value": 1}
     ]
+
+
+def test_prometheus_metrics_output_aggregates_metrics_in_multiprocess_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_dir = tempfile.mkdtemp(prefix="foodguard-prom-")
+    try:
+        load_required_env(monkeypatch, PROMETHEUS_MULTIPROC_DIR=temp_dir)
+        metrics_module = importlib.reload(importlib.import_module("app.core.metrics"))
+        metrics_module.reset_metrics_for_tests()
+        metrics_module.prepare_prometheus_storage()
+        metrics_module.record_analysis_task_metrics(
+            status="completed",
+            total_elapsed_ms=500,
+            timings={"ocr_ms": 200},
+        )
+        metrics_module.record_external_dependency_error(
+            service="ocr",
+            operation="parallel_fallback",
+            error_type="OCRServiceError",
+        )
+
+        output = metrics_module.generate_prometheus_latest().decode("utf-8")
+        families = {
+            family.name: family for family in text_string_to_metric_families(output)
+        }
+
+        assert "analysis_task_status" in families
+        assert "analysis_task_duration_seconds" in families
+        assert "analysis_task_stage_duration_seconds" in families
+        assert "external_dependency_errors" in families
+        assert 'analysis_task_status_total{status="completed"} 1.0' in output
+        assert any(
+            sample.name == "external_dependency_errors_total"
+            and sample.labels
+            == {
+                "service": "ocr",
+                "operation": "parallel_fallback",
+                "error_type": "OCRServiceError",
+            }
+            and sample.value == 1
+            for sample in families["external_dependency_errors"].samples
+        )
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_main_prometheus_endpoint_returns_text_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_dir = tempfile.mkdtemp(prefix="foodguard-prom-")
+    try:
+        load_required_env(
+            monkeypatch,
+            SKIP_STARTUP_CHECKS="true",
+            PROMETHEUS_MULTIPROC_DIR=temp_dir,
+        )
+        metrics_module = importlib.reload(importlib.import_module("app.core.metrics"))
+        main_module = importlib.reload(importlib.import_module("app.main"))
+        metrics_module.reset_metrics_for_tests()
+        metrics_module.prepare_prometheus_storage()
+        metrics_module.record_analysis_task_metrics(
+            status="completed",
+            total_elapsed_ms=640,
+            timings={"llm_ms": 300},
+        )
+
+        with TestClient(main_module.app) as client:
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain; version=")
+        assert 'analysis_task_status_total{status="completed"} 1.0' in response.text
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def test_ocr_strategy_records_nonfatal_fallback_dependency_errors(

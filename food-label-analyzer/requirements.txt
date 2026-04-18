@@ -23,6 +23,7 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-dotenv>=1.0.1
 structlog>=24.1.0
+prometheus-client>=0.22.0
 tenacity>=8.2.3
 ultralytics>=8.1.0
 onnx>=1.16.0

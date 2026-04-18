@@ -93,7 +93,6 @@ export default function ReportDetail() {
             {activeTab === 'nutrition' && (
               <NutritionTable
                 nutritionTable={report.nutrition_table}
-                nutritionParseSource={report.nutrition_parse_source}
               />
             )}
 

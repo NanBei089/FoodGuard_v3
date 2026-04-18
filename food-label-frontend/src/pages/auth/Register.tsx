@@ -198,6 +198,7 @@ export default function Register() {
                 id="register-email"
                 name="register-email"
                 type="email"
+                autoComplete="username"
                 value={email}
                 onChange={(event) => {
                   setEmail(event.target.value);
@@ -222,6 +223,7 @@ export default function Register() {
                   id="register-code"
                   name="register-code"
                   type="text"
+                  autoComplete="one-time-code"
                   value={code}
                   onChange={(event) => {
                     setCode(event.target.value);
@@ -256,6 +258,7 @@ export default function Register() {
                 id="register-password"
                 name="register-password"
                 type="password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(event) => {
                   setPassword(event.target.value);
@@ -280,6 +283,7 @@ export default function Register() {
                 id="register-confirm-password"
                 name="register-confirm-password"
                 type="password"
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(event) => {
                   setConfirmPassword(event.target.value);

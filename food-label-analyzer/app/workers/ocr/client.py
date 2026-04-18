@@ -58,6 +58,17 @@ class PaddleOCRAPIClient:
             "textDetThresh": float(self.config.text_det_thresh),
         }
 
+    def _extract_progress(self, job_data: dict[str, Any]) -> dict[str, Any]:
+        progress = job_data.get("extractProgress")
+        if not isinstance(progress, dict):
+            return {}
+        return {
+            "total_pages": progress.get("totalPages"),
+            "extracted_pages": progress.get("extractedPages"),
+            "started_at": progress.get("startTime"),
+            "finished_at": progress.get("endTime"),
+        }
+
     def _submit_job(self, image_bytes: bytes, filename: str = "image.jpg") -> str:
         data = {
             "model": self.config.model,
@@ -85,15 +96,25 @@ class PaddleOCRAPIClient:
             raise RuntimeError("OCR job submission returned invalid JSON") from exc
 
         try:
-            return str(payload["data"]["jobId"])
+            job_id = str(payload["data"]["jobId"])
         except (KeyError, TypeError) as exc:
             raise RuntimeError(
                 f"OCR job response did not include jobId: {payload}"
             ) from exc
+        logger.info(
+            "ocr_job_submitted",
+            job_id=job_id,
+            model=self.config.model,
+            filename=filename,
+            image_bytes=len(image_bytes),
+        )
+        return job_id
 
     def _poll_job(self, job_id: str) -> dict[str, Any]:
         job_status_url = f"{self.config.job_url}/{job_id}"
         deadline = time.monotonic() + self.config.poll_timeout_s
+        last_snapshot: tuple[Any, Any, Any] | None = None
+        last_progress: dict[str, Any] = {}
 
         while time.monotonic() < deadline:
             response = requests.get(
@@ -113,9 +134,31 @@ class PaddleOCRAPIClient:
 
             data = payload.get("data") or {}
             state = data.get("state")
+            progress = self._extract_progress(data)
+            snapshot = (
+                state,
+                progress.get("extracted_pages"),
+                progress.get("total_pages"),
+            )
+            if snapshot != last_snapshot:
+                logger.info(
+                    "ocr_job_polled",
+                    job_id=job_id,
+                    state=state,
+                    **progress,
+                )
+                last_snapshot = snapshot
+                last_progress = progress
             if state == "done":
+                logger.info("ocr_job_completed", job_id=job_id, **progress)
                 return data
             if state == "failed":
+                logger.warning(
+                    "ocr_job_failed",
+                    job_id=job_id,
+                    error_message=data.get("errorMsg", "unknown error"),
+                    **progress,
+                )
                 raise RuntimeError(
                     f"OCR job failed: {data.get('errorMsg', 'unknown error')}"
                 )
@@ -125,7 +168,9 @@ class PaddleOCRAPIClient:
             time.sleep(self.config.poll_interval_s)
 
         raise TimeoutError(
-            f"OCR job timed out after {self.config.poll_timeout_s} seconds. job_id={job_id}"
+            "OCR job timed out after "
+            f"{self.config.poll_timeout_s} seconds. job_id={job_id} "
+            f"progress={last_progress}"
         )
 
     def _download_jsonl_results(self, json_url: str) -> list[Any]:
@@ -149,6 +194,11 @@ class PaddleOCRAPIClient:
                         results.append(item["result"])
                     else:
                         results.append(item)
+                logger.info(
+                    "ocr_result_downloaded",
+                    json_url=json_url,
+                    result_count=len(results),
+                )
                 return results
             except requests.HTTPError as exc:
                 last_error = exc

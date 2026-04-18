@@ -3,11 +3,18 @@ import { AlertCircle, FileImage } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '@/api/client';
 import { Button } from '@/components/ui/Button';
+import { getErrorMessage } from '@/lib/api-errors';
+
+const INITIAL_POLL_INTERVAL_MS = 1500;
+const MAX_POLL_INTERVAL_MS = 3000;
+const MAX_ANALYSIS_WAIT_MS = 10 * 60 * 1000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 interface TaskStatus {
   task_id: string;
   status: 'queued' | 'processing' | 'completed' | 'failed';
   progress_message: string;
+  created_at?: string;
   report_id: string | null;
   error_message: string | null;
 }
@@ -31,10 +38,26 @@ export default function Analyzing() {
       return;
     }
 
+    let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
-    let pollInterval = 1500;
+    let pollInterval = INITIAL_POLL_INTERVAL_MS;
+    let consecutiveFailures = 0;
+    const fallbackStartedAtMs = Date.now();
+
+    const stopPollingWithError = (message: string) => {
+      if (cancelled) {
+        return;
+      }
+
+      setError(message);
+      revokePreview(previewUrl);
+    };
 
     const checkStatus = async () => {
+      if (cancelled) {
+        return;
+      }
+
       try {
         const res = await apiGet<TaskStatus>(`/analysis/tasks/${taskId}`);
 
@@ -43,7 +66,18 @@ export default function Analyzing() {
           return;
         }
 
+        consecutiveFailures = 0;
         setStatus(res.data);
+
+        const parsedCreatedAtMs = Date.parse(res.data.created_at || '');
+        const analysisStartedAtMs = Number.isNaN(parsedCreatedAtMs)
+          ? fallbackStartedAtMs
+          : parsedCreatedAtMs;
+
+        if (Date.now() - analysisStartedAtMs >= MAX_ANALYSIS_WAIT_MS) {
+          stopPollingWithError('分析耗时过长，当前 OCR/LLM 服务可能响应较慢，请稍后重试');
+          return;
+        }
 
         if (res.data.status === 'completed' && res.data.report_id) {
           revokePreview(previewUrl);
@@ -57,9 +91,18 @@ export default function Analyzing() {
           return;
         }
 
-        pollInterval = Math.min(pollInterval + 500, 3000);
+        pollInterval = Math.min(pollInterval + 500, MAX_POLL_INTERVAL_MS);
         timeoutId = setTimeout(checkStatus, pollInterval);
-      } catch {
+      } catch (err: unknown) {
+        consecutiveFailures += 1;
+
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          stopPollingWithError(
+            getErrorMessage(err, '分析状态获取失败，请检查后端服务或稍后重试'),
+          );
+          return;
+        }
+
         timeoutId = setTimeout(checkStatus, pollInterval);
       }
     };
@@ -67,6 +110,7 @@ export default function Analyzing() {
     checkStatus();
 
     return () => {
+      cancelled = true;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }

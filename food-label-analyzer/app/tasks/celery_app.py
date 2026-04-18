@@ -6,11 +6,12 @@ import os
 from chromadb.errors import ChromaError
 import structlog
 from celery import Celery
-from celery.signals import worker_init, worker_process_init
+from celery.signals import worker_init, worker_process_init, worker_process_shutdown
 
 from app.core.config import get_settings
 from app.core.errors import EmbeddingServiceError, LLMServiceError, OCRServiceError
 from app.core.logging import setup_logging
+from app.core.metrics import mark_prometheus_process_dead, prepare_prometheus_storage
 from app.workers import llm_worker, ocr_worker, rag_worker, yolo_worker
 
 settings = get_settings()
@@ -44,7 +45,10 @@ def _configure_worker_resources() -> None:
     settings = get_settings()
     setup_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
     logger = structlog.get_logger(__name__)
+    prometheus_storage = prepare_prometheus_storage()
     logger.info("celery_worker_initializing")
+    if prometheus_storage:
+        logger.info("prometheus_multiprocess_enabled", path=prometheus_storage)
 
     try:
         llm_worker.validate_configuration()
@@ -100,10 +104,17 @@ def on_worker_process_init(**kwargs) -> None:
         _warmup_worker_resources()
 
 
+@worker_process_shutdown.connect
+def on_worker_process_shutdown(pid=None, **kwargs) -> None:
+    if pid is not None:
+        mark_prometheus_process_dead(pid)
+
+
 __all__ = [
     "celery_app",
     "on_worker_init",
     "on_worker_process_init",
+    "on_worker_process_shutdown",
     "_configure_worker_resources",
     "_warmup_worker_resources",
     "_initialize_worker_resources",

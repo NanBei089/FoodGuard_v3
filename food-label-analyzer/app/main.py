@@ -13,6 +13,7 @@ import structlog
 import structlog.contextvars
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from minio import Minio
 from sqlalchemy import text
 
@@ -20,6 +21,11 @@ from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import setup_logging
+from app.core.metrics import (
+    generate_prometheus_latest,
+    prepare_prometheus_storage,
+    prometheus_content_type,
+)
 from app.db.redis import close_redis, get_redis
 from app.db.session import get_engine
 from app.schemas.common import ApiResponse, success_response
@@ -27,6 +33,7 @@ from app.schemas.health import HealthCheckResponse, HealthServicesSchema
 
 APP_VERSION = "1.0.0"
 HEALTH_TIMEOUT_SECONDS = 2
+OCR_HEALTH_TIMEOUT_SECONDS = 5
 OCR_HEALTHCHECK_JOB_ID = "ocrjob-health-check-probe"
 
 settings = get_settings()
@@ -128,9 +135,14 @@ async def _run_startup_checks() -> None:
     _check_chromadb_directory()
 
 
-async def _run_with_timeout(check_name: str, probe) -> str:
+async def _run_with_timeout(
+    check_name: str,
+    probe,
+    *,
+    timeout_s: float = HEALTH_TIMEOUT_SECONDS,
+) -> str:
     try:
-        result = await asyncio.wait_for(probe(), timeout=HEALTH_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(probe(), timeout=timeout_s)
         if result in {"up", "down", "disabled"}:
             return result
         return "up"
@@ -191,7 +203,7 @@ async def _probe_remote_ocr_runtime() -> str | None:
     if token:
         headers["Authorization"] = f"bearer {token}"
     async with httpx.AsyncClient(
-        timeout=HEALTH_TIMEOUT_SECONDS, follow_redirects=True
+        timeout=OCR_HEALTH_TIMEOUT_SECONDS, follow_redirects=True
     ) as client:
         response = await client.get(
             f"{current_settings.PADDLEOCR_JOB_URL.rstrip('/')}/{OCR_HEALTHCHECK_JOB_ID}",
@@ -215,7 +227,9 @@ async def _build_health_payload() -> HealthCheckResponse:
             "ollama_embedding", _probe_ollama_embedding
         ),
         ocr_remote_api=await _run_with_timeout(
-            "ocr_remote_api", _probe_remote_ocr_runtime
+            "ocr_remote_api",
+            _probe_remote_ocr_runtime,
+            timeout_s=OCR_HEALTH_TIMEOUT_SECONDS,
         ),
     )
     overall = (
@@ -240,7 +254,10 @@ def _is_https_request(request: Request) -> bool:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     setup_logging(settings.LOG_LEVEL, settings.LOG_FORMAT)
+    prometheus_storage = prepare_prometheus_storage()
     logger.info("application_config_summary", **_build_config_summary(settings))
+    if prometheus_storage:
+        logger.info("prometheus_multiprocess_enabled", path=prometheus_storage)
 
     if settings.SKIP_STARTUP_CHECKS:
         logger.info("startup_checks_skipped")
@@ -325,6 +342,14 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 )
 async def health() -> ApiResponse[HealthCheckResponse]:
     return success_response(await _build_health_payload(), message="健康检查完成")
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    return Response(
+        content=generate_prometheus_latest(),
+        media_type=prometheus_content_type(),
+    )
 
 
 __all__ = ["app", "lifespan"]

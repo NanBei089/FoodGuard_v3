@@ -1,20 +1,15 @@
 import { memo } from 'react';
 import { AlertTriangle, BarChart3, Info } from 'lucide-react';
-import {
-  getNutritionLevelMeta,
-  getNutritionParseSourceLabel,
-} from '@/lib/foodguard';
+import { getNutritionLevelMeta } from '@/lib/foodguard';
 import { cn } from '@/lib/utils';
 import type { ReportNutritionTable } from '@/types/report';
 
 interface NutritionTableProps {
   nutritionTable: ReportNutritionTable | null;
-  nutritionParseSource: string | null;
 }
 
 export const NutritionTable = memo(function NutritionTable({
   nutritionTable,
-  nutritionParseSource,
 }: NutritionTableProps) {
   return (
     <div className="space-y-8 rounded-[32px] border border-slate-200 bg-white p-8 shadow-sm">
@@ -31,13 +26,6 @@ export const NutritionTable = memo(function NutritionTable({
               {nutritionTable?.serving_basis || nutritionTable?.subtitle || '每100克 (Per 100g)'}
             </p>
           </div>
-        </div>
-
-        <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          {getNutritionParseSourceLabel(
-            nutritionTable?.parse_source || nutritionParseSource,
-          )}
         </div>
       </div>
 

@@ -20,6 +20,7 @@ interface StreamReportChatOptions {
   reportId: string;
   message: string;
   signal?: AbortSignal;
+  idleTimeoutMs?: number;
   onMeta?: (payload: StreamMetaPayload) => void;
   onDelta?: (chunk: string) => void;
   onDone?: (payload: StreamDonePayload) => void;
@@ -29,6 +30,8 @@ export interface StreamReportChatResult {
   doneEventReceived: boolean;
   receivedDelta: boolean;
 }
+
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 6000;
 
 function parseSseEventBlock(block: string): { event: string; data: string } | null {
   const lines = block.split('\n');
@@ -104,10 +107,65 @@ function normalizeSseBuffer(buffer: string) {
   return buffer.replace(/\r\n/g, '\n');
 }
 
+function createAbortError() {
+  if (typeof DOMException !== 'undefined') {
+    return new DOMException('The operation was aborted.', 'AbortError');
+  }
+
+  return Object.assign(new Error('The operation was aborted.'), {
+    name: 'AbortError',
+  });
+}
+
+async function readStreamChunkWithGuards(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+  idleTimeoutMs: number,
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let abortHandler: (() => void) | null = null;
+
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        if (!signal) {
+          return;
+        }
+
+        if (signal.aborted) {
+          reject(createAbortError());
+          return;
+        }
+
+        abortHandler = () => reject(createAbortError());
+        signal.addEventListener('abort', abortHandler, { once: true });
+      }),
+      new Promise<never>((_, reject) => {
+        if (idleTimeoutMs <= 0) {
+          return;
+        }
+
+        timeoutId = setTimeout(() => {
+          reject(new Error('问答流长时间未返回新内容，请稍后重试'));
+        }, idleTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+    if (signal && abortHandler) {
+      signal.removeEventListener('abort', abortHandler);
+    }
+  }
+}
+
 export async function streamReportChat({
   reportId,
   message,
   signal,
+  idleTimeoutMs = DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   onMeta,
   onDelta,
   onDone,
@@ -177,7 +235,11 @@ export async function streamReportChat({
   };
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunkWithGuards(
+      reader,
+      signal,
+      idleTimeoutMs,
+    );
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
     buffer = normalizeSseBuffer(buffer);
 

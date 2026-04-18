@@ -2,16 +2,62 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+import importlib
 import math
 import os
+from pathlib import Path
 import threading
 from typing import Any
 
+from app.core.config import get_settings
+
+_settings = get_settings()
+if _settings.prometheus_multiproc_enabled:
+    os.environ.setdefault(
+        "PROMETHEUS_MULTIPROC_DIR",
+        _settings.PROMETHEUS_MULTIPROC_DIR.strip(),
+    )
+
+from prometheus_client import values as prometheus_values
+
+importlib.reload(prometheus_values)
+
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Histogram
+from prometheus_client import generate_latest, multiprocess
+
 _MAX_SAMPLES = 2048
 _HISTOGRAM_BUCKETS_MS = (100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 300000)
+_PROMETHEUS_HISTOGRAM_BUCKETS_S = tuple(bucket / 1000 for bucket in _HISTOGRAM_BUCKETS_MS)
 _histograms: dict[str, deque[int]] = defaultdict(lambda: deque(maxlen=_MAX_SAMPLES))
 _counters: dict[tuple[str, tuple[tuple[str, str], ...]], int] = defaultdict(int)
 _metrics_lock = threading.RLock()
+_prometheus_registry = CollectorRegistry(auto_describe=True)
+
+_analysis_task_status_counter = Counter(
+    "analysis_task_status",
+    "Total number of analysis task attempts by final status.",
+    ["status"],
+    registry=_prometheus_registry,
+)
+_analysis_task_duration_histogram = Histogram(
+    "analysis_task_duration_seconds",
+    "Total analysis task duration in seconds.",
+    buckets=_PROMETHEUS_HISTOGRAM_BUCKETS_S,
+    registry=_prometheus_registry,
+)
+_analysis_task_stage_duration_histogram = Histogram(
+    "analysis_task_stage_duration_seconds",
+    "Analysis task stage duration in seconds.",
+    ["stage"],
+    buckets=_PROMETHEUS_HISTOGRAM_BUCKETS_S,
+    registry=_prometheus_registry,
+)
+_external_dependency_error_counter = Counter(
+    "external_dependency_errors",
+    "Total number of external dependency errors observed by service and operation.",
+    ["service", "operation", "error_type"],
+    registry=_prometheus_registry,
+)
 
 
 def _counter_key(
@@ -20,6 +66,29 @@ def _counter_key(
 ) -> tuple[str, tuple[tuple[str, str], ...]]:
     normalized_labels = tuple(sorted((labels or {}).items()))
     return name, normalized_labels
+
+
+def _prometheus_multiproc_dir() -> str:
+    return _settings.PROMETHEUS_MULTIPROC_DIR.strip()
+
+
+def prepare_prometheus_storage() -> str | None:
+    multiproc_dir = _prometheus_multiproc_dir()
+    if not multiproc_dir:
+        return None
+
+    storage_path = Path(multiproc_dir)
+    storage_path.mkdir(parents=True, exist_ok=True)
+    return str(storage_path)
+
+
+def mark_prometheus_process_dead(pid: int | None = None) -> None:
+    multiproc_dir = _prometheus_multiproc_dir()
+    if not multiproc_dir:
+        return
+
+    process_id = pid if pid is not None else os.getpid()
+    multiprocess.mark_process_dead(process_id)
 
 
 def observe_histogram(name: str, value_ms: int | float) -> None:
@@ -82,9 +151,14 @@ def record_analysis_task_metrics(
 ) -> None:
     increment_counter("analysis_task.status", {"status": status})
     observe_histogram("analysis_task.total_ms", total_elapsed_ms)
+    _analysis_task_status_counter.labels(status=status).inc()
+    _analysis_task_duration_histogram.observe(total_elapsed_ms / 1000)
     for timing_name, duration_ms in timings.items():
         stage = timing_name.removesuffix("_ms")
         observe_histogram(f"analysis_task.stage.{stage}_ms", duration_ms)
+        _analysis_task_stage_duration_histogram.labels(stage=stage).observe(
+            duration_ms / 1000
+        )
 
 
 def record_external_dependency_error(
@@ -101,6 +175,23 @@ def record_external_dependency_error(
             "error_type": error_type,
         },
     )
+    _external_dependency_error_counter.labels(
+        service=service,
+        operation=operation,
+        error_type=error_type,
+    ).inc()
+
+
+def generate_prometheus_latest() -> bytes:
+    if _prometheus_multiproc_dir():
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return generate_latest(registry)
+    return generate_latest(_prometheus_registry)
+
+
+def prometheus_content_type() -> str:
+    return CONTENT_TYPE_LATEST
 
 
 def get_metrics_snapshot() -> dict[str, Any]:
@@ -133,9 +224,13 @@ def reset_metrics_for_tests() -> None:
 
 
 __all__ = [
+    "generate_prometheus_latest",
     "get_metrics_snapshot",
     "increment_counter",
+    "mark_prometheus_process_dead",
     "observe_histogram",
+    "prepare_prometheus_storage",
+    "prometheus_content_type",
     "record_analysis_task_metrics",
     "record_external_dependency_error",
     "reset_metrics_for_tests",

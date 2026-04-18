@@ -244,6 +244,7 @@ export default function Profile() {
         </div>
 
         <ChangePasswordForm
+          accountEmail={user?.email || ''}
           currentPassword={currentPassword}
           newPassword={newPassword}
           confirmNewPassword={confirmNewPassword}

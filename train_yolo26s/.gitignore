@@ -48,6 +48,9 @@ mlruns/
 *.ckpt
 *.pth
 
-# Raw data / generated dataset images
+# Raw data / generated dataset
 data/images/
+data/labels/
+data/*.txt
 dataset/images/
+dataset/labels/

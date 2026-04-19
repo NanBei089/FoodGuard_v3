@@ -5,6 +5,7 @@
 !/docs/
 !/food-label-analyzer/
 !/food-label-frontend/
+!/train_yolo26s/
 
 # Local Codex skills stay on this machine only.
 /SKILLS/

@@ -87,3 +87,21 @@ Desktop.ini
 /food-label-analyzer/models_store/
 /food-label-analyzer/chroma_data/
 /food-label-analyzer/minio_data/
+
+# YOLO training: keep code/config/results, ignore heavy or raw dataset files
+/train_yolo26s/*.pt
+/train_yolo26s/*.onnx
+/train_yolo26s/*.engine
+/train_yolo26s/*.tflite
+/train_yolo26s/*.torchscript
+/train_yolo26s/*.mlmodel
+/train_yolo26s/*.ckpt
+/train_yolo26s/*.pth
+/train_yolo26s/data/images/
+/train_yolo26s/data/labels/
+/train_yolo26s/data/*.txt
+/train_yolo26s/dataset/images/
+/train_yolo26s/dataset/labels/
+/train_yolo26s/runs/**/weights/
+/train_yolo26s/runs/**/weights/**
+/train_yolo26s/runs/**/events.out.tfevents*

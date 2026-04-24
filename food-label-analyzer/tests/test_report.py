@@ -347,6 +347,7 @@ def test_presigned_url_cache_coalesces_concurrent_same_key_requests(
 
     assert urls == ["https://example.com/same-key"] * 8
     fake_storage.get_presigned_url.assert_awaited_once_with("same-key")
+    assert "same-key" not in report_service_module._PRESIGNED_URL_LOCKS
 
 
 def test_presigned_url_cache_hit_does_not_create_lock_or_call_storage(

@@ -257,16 +257,20 @@ async def _get_presigned_url_with_cache(object_key: str) -> str:
     if cached is not None:
         return cached
     lock = _PRESIGNED_URL_LOCKS.setdefault(object_key, asyncio.Lock())
-    async with lock:
-        cached = _get_cached_presigned_url(object_key)
-        if cached is not None:
-            return cached
-        signed_url = await asyncio.wait_for(
-            get_storage_service().get_presigned_url(object_key),
-            timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
-        )
-        _store_cached_presigned_url(object_key, signed_url)
-        return signed_url
+    try:
+        async with lock:
+            cached = _get_cached_presigned_url(object_key)
+            if cached is not None:
+                return cached
+            signed_url = await asyncio.wait_for(
+                get_storage_service().get_presigned_url(object_key),
+                timeout=_PRESIGNED_URL_TIMEOUT_SECONDS,
+            )
+            _store_cached_presigned_url(object_key, signed_url)
+            return signed_url
+    finally:
+        if _PRESIGNED_URL_LOCKS.get(object_key) is lock:
+            _PRESIGNED_URL_LOCKS.pop(object_key, None)
 
 
 def _build_message_schema(

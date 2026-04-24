@@ -16,6 +16,15 @@ import { summarizePreferences } from '@/lib/foodguard';
 
 const ANALYSIS_UPLOAD_TIMEOUT_MS = 120000;
 
+function clearStoredUploadPreview(url: string) {
+  if (url.startsWith('blob:')) {
+    URL.revokeObjectURL(url);
+  }
+  if (sessionStorage.getItem('latest_upload_preview') === url) {
+    sessionStorage.removeItem('latest_upload_preview');
+  }
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -160,9 +169,10 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append('file', file);
+    let analyzingPreviewUrl = '';
 
     try {
-      const analyzingPreviewUrl = URL.createObjectURL(file);
+      analyzingPreviewUrl = URL.createObjectURL(file);
       sessionStorage.setItem('latest_upload_preview', analyzingPreviewUrl);
 
       const res = await apiPost<{ task_id: string }>(
@@ -177,6 +187,7 @@ export default function Home() {
       );
 
       if (res.code !== 0) {
+        clearStoredUploadPreview(analyzingPreviewUrl);
         setError(res.message || '上传失败');
         return;
       }
@@ -193,6 +204,7 @@ export default function Home() {
       } else {
         setError(getErrorMessage(err, '网络请求失败，请稍后重试'));
       }
+      clearStoredUploadPreview(analyzingPreviewUrl);
     } finally {
       setLoading(false);
     }

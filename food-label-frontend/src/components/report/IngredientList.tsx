@@ -29,6 +29,8 @@ const STOP_PATTERNS = [
   /食用限量/u,
   /建议每天/u,
   /不适宜人群/u,
+  /致敏物质/u,
+  /致敏源/u,
   /贮存条件/u,
   /储存条件/u,
   /储藏方法/u,
@@ -53,6 +55,7 @@ const NOTICE_MARKERS = [
   '食用限量',
   '建议每天',
   '不适宜人群',
+  '致敏原',
   '贮存条件',
   '储存条件',
   '储藏方法',
@@ -71,6 +74,7 @@ const NOTICE_MARKERS = [
 
 const DOSAGE_PATTERN =
   /(?:\\(?:leqslant|geqslant)\s*)?(?:[<<=≥>]\s*)?\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|毫升|克|千克|天|日|袋|份|支|片|粒|包|%)+(?:\s*\/\s*[天日袋份次包])?/giu;
+const AMOUNT_QUALIFIER_PATTERN = /(?:添加量|含量)\s*[≥≤<>]\s*\d/u;
 
 export const IngredientList = memo(
   function IngredientList({ ingredients, ingredientsText }: IngredientListProps) {
@@ -111,7 +115,7 @@ export const IngredientList = memo(
         </div>
 
         <div>
-          <h4 className="mb-4 text-sm font-semibold text-slate-900">详细配料列表</h4>
+          <h4 className="mb-4 text-sm font-semibold text-slate-900">配料说明</h4>
           {displayedIngredients.length > 0 ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
               {displayedIngredients.map((item) => {
@@ -186,7 +190,28 @@ function extractIngredientKeywords(ingredientsText: string): string[] {
     keywords.push(keyword);
   }
 
-  return keywords;
+  return mergeFragmentedIngredientKeywords(keywords);
+}
+
+function mergeFragmentedIngredientKeywords(keywords: string[]): string[] {
+  const merged: string[] = [];
+  let index = 0;
+
+  while (index < keywords.length) {
+    const current = keywords[index];
+    const next = keywords[index + 1];
+
+    if (current === '单' && next?.startsWith('双')) {
+      merged.push(`${current}、${next}`);
+      index += 2;
+      continue;
+    }
+
+    merged.push(current);
+    index += 1;
+  }
+
+  return merged;
 }
 
 function buildFallbackIngredients(ingredients: IngredientAnalysisItem[]): DisplayIngredientItem[] {
@@ -300,7 +325,13 @@ function findFirstStopIndex(value: string): number {
 function toIngredientTitle(value: string): string {
   let cleaned = value
     .replace(/\$/g, ' ')
-    .replace(/\\(?:leqslant|geqslant)/gu, ' ')
+    .replace(/\\geqslant/gu, '≥')
+    .replace(/\\leqslant/gu, '≤')
+    .replace(/≧/gu, '≥')
+    .replace(/≦/gu, '≤')
+    .replace(/>\s*=/gu, '≥')
+    .replace(/<\s*=/gu, '≤')
+    .replace(/\s*([≥≤<>])\s*/gu, '$1')
     .replace(/^(?:配料表|配料|原辅料|主要原料|原料|成分)[:：\s]*/u, '')
     .trim();
 
@@ -319,8 +350,9 @@ function toIngredientTitle(value: string): string {
     cleaned = cleaned.slice(0, markerIndex);
   }
 
-  return cleaned
-    .replace(DOSAGE_PATTERN, ' ')
+  const shouldKeepAmountQualifier = AMOUNT_QUALIFIER_PATTERN.test(cleaned);
+
+  return (shouldKeepAmountQualifier ? cleaned : cleaned.replace(DOSAGE_PATTERN, ' '))
     .replace(/[。]+$/u, '')
     .replace(/^[\s:：;；，,。、]+|[\s:：;；，,。、]+$/gu, '')
     .trim();

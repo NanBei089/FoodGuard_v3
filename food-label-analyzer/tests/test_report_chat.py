@@ -423,7 +423,7 @@ def test_report_chat_service_stream_persists_user_and_assistant_messages(
     assert any("event: delta" in item for item in events)
     assert any("event: done" in item for item in events)
     assert fake_db.add.call_count == 2
-    assert fake_db.commit.await_count >= 2
+    assert fake_db.commit.await_count == 2
 
 
 def test_report_chat_service_stream_does_not_persist_assistant_on_failure(
@@ -508,4 +508,6 @@ def test_report_chat_service_stream_does_not_persist_assistant_on_failure(
 
     assert any("event: error" in item for item in events)
     assert fake_db.add.call_count == 1
+    fake_db.delete.assert_awaited_once()
+    assert fake_db.commit.await_count == 2
     fake_db.rollback.assert_awaited()

@@ -16,6 +16,7 @@ from app.services.task_service import (
     create_task_with_limit_guard,
     get_task_status_payload,
     get_task_with_permission,
+    mark_task_enqueue_failed,
     update_celery_task_id,
     validate_file,
 )
@@ -58,13 +59,14 @@ async def upload_image(
             db,
         )
         celery_task_id = f"analysis:{task.id}"
+        await update_celery_task_id(task.id, celery_task_id, db)
+        await db.commit()
         celery_app.send_task(
             "analysis.process_image",
             args=[str(task.id), image_key, str(current_user.id)],
             queue="analysis",
             task_id=celery_task_id,
         )
-        await update_celery_task_id(task.id, celery_task_id, db)
     except TooManyConcurrentTasksError:
         try:
             await storage_service.delete_image(image_key)
@@ -72,6 +74,12 @@ async def upload_image(
             pass
         raise
     except Exception as exc:
+        if "task" in locals():
+            try:
+                await mark_task_enqueue_failed(task.id, "分析任务入队失败", db)
+                await db.commit()
+            except Exception:
+                await db.rollback()
         try:
             await storage_service.delete_image(image_key)
         except Exception:

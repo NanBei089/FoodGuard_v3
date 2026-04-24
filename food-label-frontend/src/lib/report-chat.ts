@@ -31,7 +31,7 @@ export interface StreamReportChatResult {
   receivedDelta: boolean;
 }
 
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 6000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 30000;
 
 function parseSseEventBlock(block: string): { event: string; data: string } | null {
   const lines = block.split('\n');

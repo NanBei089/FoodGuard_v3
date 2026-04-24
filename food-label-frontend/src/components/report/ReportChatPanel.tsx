@@ -1,17 +1,21 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Loader2, MessageSquareText, SendHorizontal, Sparkles } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { apiGet, apiPost } from '@/api/client';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { getErrorMessage } from '@/lib/api-errors';
 import { streamReportChat } from '@/lib/report-chat';
+import {
+  hasRecoveredAssistantReply,
+  PENDING_RECOVERY_INTERVAL_MS,
+  type PendingRecoveryRequest,
+} from '@/lib/report-chat-recovery';
 import type {
   ReportChatSuggestionsResponse,
   ReportConversationMessage,
   ReportConversationResponse,
 } from '@/types/report-chat';
+import { ChatMessageContent } from './ChatMessageContent';
 
 interface LocalChatMessage extends ReportConversationMessage {
   pending?: boolean;
@@ -22,16 +26,7 @@ interface ReportChatPanelProps {
   initialConversation?: ReportConversationResponse | null;
 }
 
-interface PendingRecoveryRequest {
-  baselineMessageCount: number;
-  content: string;
-  startedAt: string;
-  userMessageId: string | null;
-}
-
-const PENDING_RECOVERY_INTERVAL_MS = 2000;
-const PENDING_RECOVERY_MATCH_WINDOW_MS = 30_000;
-const STREAM_IDLE_TIMEOUT_MS = 6000;
+const STREAM_IDLE_TIMEOUT_MS = 30000;
 
 function nowIsoString() {
   return new Date().toISOString();
@@ -56,144 +51,6 @@ function buildConversationState(
     suggestions: [...(initialConversation.suggested_questions || [])],
     hasConversation: true,
   };
-}
-
-function findRecoveredUserMessageIndex(
-  messages: ReportConversationResponse['messages'],
-  pendingRequest: PendingRecoveryRequest,
-) {
-  if (pendingRequest.userMessageId) {
-    const messageIndex = messages.findIndex(
-      (item) => item.message_id === pendingRequest.userMessageId,
-    );
-    if (messageIndex >= 0) {
-      return messageIndex;
-    }
-  }
-
-  const requestStartedAtMs = Date.parse(pendingRequest.startedAt);
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const item = messages[index];
-    if (item.role !== 'user' || item.content !== pendingRequest.content) {
-      continue;
-    }
-
-    const messageCreatedAtMs = Date.parse(item.created_at);
-    if (
-      Number.isNaN(requestStartedAtMs) ||
-      Number.isNaN(messageCreatedAtMs) ||
-      messageCreatedAtMs >= requestStartedAtMs - PENDING_RECOVERY_MATCH_WINDOW_MS
-    ) {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function hasRecoveredAssistantReply(
-  messages: ReportConversationResponse['messages'],
-  pendingRequest: PendingRecoveryRequest,
-) {
-  const userMessageIndex = findRecoveredUserMessageIndex(messages, pendingRequest);
-  if (
-    userMessageIndex >= 0 &&
-    messages.slice(userMessageIndex + 1).some((item) => item.role === 'assistant')
-  ) {
-    return true;
-  }
-
-  const newMessages = messages.slice(pendingRequest.baselineMessageCount);
-  return (
-    newMessages.some((item) => item.role === 'user') &&
-    newMessages.some((item) => item.role === 'assistant')
-  );
-}
-
-function ChatMessageContent({
-  content,
-  isAssistant,
-  pending = false,
-}: {
-  content: string;
-  isAssistant: boolean;
-  pending?: boolean;
-}) {
-  if (!content) {
-    return <div>{pending ? '正在生成回答...' : ''}</div>;
-  }
-
-  if (!isAssistant) {
-    return <div className="whitespace-pre-wrap break-words">{content}</div>;
-  }
-
-  return (
-    <div className="break-words text-sm leading-6 text-slate-700">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          h1: ({ children }) => (
-            <h1 className="mb-2 mt-4 text-base font-semibold text-slate-900 first:mt-0">{children}</h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="mb-2 mt-4 text-base font-semibold text-slate-900 first:mt-0">{children}</h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="mb-2 mt-3 text-sm font-semibold text-slate-900 first:mt-0">{children}</h3>
-          ),
-          p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-          strong: ({ children }) => <strong className="font-semibold text-slate-900">{children}</strong>,
-          ul: ({ children }) => <ul className="mb-3 ml-5 list-disc space-y-1 last:mb-0">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-3 ml-5 list-decimal space-y-1 last:mb-0">{children}</ol>,
-          li: ({ children }) => <li className="pl-1">{children}</li>,
-          blockquote: ({ children }) => (
-            <blockquote className="mb-3 border-l-4 border-emerald-200 bg-emerald-50/60 px-3 py-2 text-slate-700 last:mb-0">
-              {children}
-            </blockquote>
-          ),
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="text-emerald-700 underline underline-offset-2"
-            >
-              {children}
-            </a>
-          ),
-          code: ({ children, className }) => {
-            if (className) {
-              return (
-                <code className="block overflow-x-auto rounded-xl bg-slate-900/95 px-3 py-2 text-xs text-slate-100">
-                  {children}
-                </code>
-              );
-            }
-            return (
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[0.85em] text-slate-800">
-                {children}
-              </code>
-            );
-          },
-          pre: ({ children }) => <pre className="mb-3 last:mb-0">{children}</pre>,
-          table: ({ children }) => (
-            <div className="mb-3 overflow-x-auto rounded-xl border border-slate-200 last:mb-0">
-              <table className="min-w-full border-collapse text-left text-xs">{children}</table>
-            </div>
-          ),
-          thead: ({ children }) => <thead className="bg-slate-100 text-slate-700">{children}</thead>,
-          th: ({ children }) => (
-            <th className="border-b border-slate-200 px-3 py-2 font-semibold">{children}</th>
-          ),
-          td: ({ children }) => <td className="border-b border-slate-100 px-3 py-2 align-top">{children}</td>,
-          hr: () => <hr className="my-3 border-slate-200" />,
-        }}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
 }
 
 export const ReportChatPanel = memo(function ReportChatPanel({
@@ -521,9 +378,17 @@ export const ReportChatPanel = memo(function ReportChatPanel({
       if (isActiveController() && (err as { name?: string }).name !== 'AbortError') {
         const recovered = await tryRecoverPendingConversation(controller);
         if (!recovered) {
+          const persistedUserMessageId = pendingRequestRef.current?.userMessageId;
           clearPendingRecovery();
           pendingRequestRef.current = null;
-          setMessages((current) => current.filter((item) => item.message_id !== tempAssistantId));
+          setMessages((current) =>
+            current.filter(
+              (item) =>
+                item.message_id !== tempAssistantId &&
+                item.message_id !== tempUserId &&
+                (!persistedUserMessageId || item.message_id !== persistedUserMessageId),
+            ),
+          );
           setError(getErrorMessage(err, '回答中断，未保存，请重试'));
         }
       }

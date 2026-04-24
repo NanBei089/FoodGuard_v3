@@ -315,4 +315,44 @@ describe('ReportChatPanel', () => {
       expect(screen.getByText('Recovered via appended snapshot')).toBeTruthy();
     }, { timeout: 4000 });
   });
+
+  it('removes the unsaved user message when stream recovery fails', async () => {
+    const initialConversation = createConversation([]);
+
+    apiGetMock.mockResolvedValue(okResponse(initialConversation));
+    apiPostMock.mockResolvedValue(
+      okResponse<ReportChatSuggestionsResponse>({ suggested_questions: [] }),
+    );
+    streamReportChatMock.mockRejectedValue(new Error('stream failed'));
+
+    render(
+      <ReportChatPanel
+        reportId="report-1"
+        initialConversation={initialConversation}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        apiGetMock.mock.calls.filter(([url]) => url === '/reports/report-1/chat').length,
+      ).toBeGreaterThanOrEqual(1);
+    });
+
+    const input = document.getElementById('report-chat-message') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+
+    fireEvent.change(input!, { target: { value: 'Will this be removed?' } });
+
+    const [sendButton] = screen.getAllByRole('button');
+    await waitFor(() => {
+      expect(sendButton?.hasAttribute('disabled')).toBe(false);
+    });
+
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('stream failed')).toBeTruthy();
+    });
+    expect(screen.queryByText('Will this be removed?')).toBeNull();
+  });
 });

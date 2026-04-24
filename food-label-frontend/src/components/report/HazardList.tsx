@@ -12,7 +12,7 @@ export function HazardList({ report }: HazardListProps) {
     <div className="mb-8">
       <h3 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-900">
         <Sparkles className="h-5 w-5 text-emerald-500" />
-        核心洞察
+        分析结果
       </h3>
 
       <div className="rounded-2xl border-2 border-amber-200 bg-white p-6 shadow-sm">

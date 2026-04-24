@@ -102,6 +102,8 @@ Desktop.ini
 /train_yolo26s/data/*.txt
 /train_yolo26s/dataset/images/
 /train_yolo26s/dataset/labels/
+/train_yolo26s/runs/
+/train_yolo26s/runs/**
 /train_yolo26s/runs/**/weights/
 /train_yolo26s/runs/**/weights/**
 /train_yolo26s/runs/**/events.out.tfevents*

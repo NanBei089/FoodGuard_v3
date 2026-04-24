@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Protocol, TypeVar, overload
 
@@ -37,11 +38,33 @@ from app.tasks.analysis.persistence import (
 from app.tasks.celery_app import celery_app
 from app.workers import llm_worker, ocr_worker, rag_worker, yolo_worker
 from app.workers.extractor import ingredient_extractor, nutrition_extractor
-from app.workers.ocr_worker import TableRecognitionResult
+from app.workers.ocr_worker import OCRTextResult, TableRecognitionResult
 
 logger = structlog.get_logger(__name__)
 _INTERNAL_ANALYSIS_ERROR_MESSAGE = "Internal analysis pipeline error"
 T = TypeVar("T")
+
+
+@dataclass
+class AnalysisContext:
+    task_id: str
+    image_key: str
+    user_id: str
+    timings: dict[str, int] = field(default_factory=dict)
+    image_bytes: bytes = b""
+    bbox: dict[str, Any] | None = None
+    cropped_image: bytes = b""
+    masked_full_image: bytes = b""
+    full_text_result: OCRTextResult | None = None
+    table_result: TableRecognitionResult | None = None
+    full_text: str = ""
+    nutrition_json: dict[str, Any] = field(default_factory=dict)
+    ingredient_terms: list[str] = field(default_factory=list)
+    ingredients_text: str = ""
+    rag_results_json: dict[str, Any] = field(default_factory=dict)
+    llm_output_json: dict[str, Any] = field(default_factory=dict)
+    score: int = 0
+    artifact_urls: dict[str, Any] | None = None
 
 
 class _SupportsModelDump(Protocol):
@@ -100,6 +123,12 @@ def _extract_score(llm_output_json: dict[str, Any]) -> int:
 
 def _elapsed_ms_since(started_at: float) -> int:
     return int((perf_counter() - started_at) * 1000)
+
+
+def _record_step_timing(
+    context: AnalysisContext, timing_key: str, started_at: float
+) -> None:
+    context.timings[timing_key] = int((perf_counter() - started_at) * 1000)
 
 
 def _record_task_attempt_metrics(
@@ -169,6 +198,148 @@ def _run_llm(
     except LLMServiceError:
         raise
 
+
+def _download_source_image(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    context.image_bytes = _download_image(context.image_key)
+    _record_step_timing(context, "download_ms", step_started)
+
+
+def _detect_and_prepare_images(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    context.bbox = yolo_worker.detect(context.image_bytes)
+    context.cropped_image = (
+        yolo_worker.crop_image(context.image_bytes, context.bbox)
+        if context.bbox
+        else context.image_bytes
+    )
+    context.masked_full_image = (
+        yolo_worker.mask_image(context.image_bytes, context.bbox)
+        if context.bbox
+        else context.image_bytes
+    )
+    _record_step_timing(context, "yolo_ms", step_started)
+
+
+def _run_ocr_step(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    if context.bbox:
+        context.full_text_result, context.table_result = _run_ocr_with_bbox_fallback(
+            task_id=context.task_id,
+            image_bytes=context.image_bytes,
+            masked_full_image=context.masked_full_image,
+            cropped_image=context.cropped_image,
+        )
+    else:
+        context.full_text_result = _run_ocr_full_text(context.image_bytes)
+        try:
+            context.table_result = _run_ocr_table(context.image_bytes)
+        except OCRServiceError as exc:
+            record_external_dependency_error(
+                service="ocr",
+                operation="nutrition_table_full_image_scan",
+                error_type=type(exc).__name__,
+            )
+            logger.warning(
+                "nutrition_table_full_image_scan_failed",
+                task_id=context.task_id,
+                error_message=str(exc),
+            )
+            context.table_result = None
+    context.full_text = context.full_text_result.raw_text
+    _record_step_timing(context, "ocr_ms", step_started)
+
+
+def _parse_nutrition_step(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    table_result = context.table_result
+    nutrition_output = nutrition_extractor.parse(
+        table_result.model_dump() if table_result else None,
+        (
+            table_result.ocr_fallback_text
+            if table_result and table_result.ocr_fallback_text
+            else context.full_text or None
+        ),
+    )
+    context.nutrition_json = _require_dict_payload("nutrition", nutrition_output)
+    _record_step_timing(context, "nutrition_ms", step_started)
+
+
+def _extract_ingredients_step(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    context.ingredient_terms, context.ingredients_text = ingredient_extractor.extract(
+        context.full_text
+    )
+    _record_step_timing(context, "ingredients_ms", step_started)
+
+
+def _retrieve_rag_step(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    rag_output = _run_rag(context.ingredient_terms, context.ingredients_text)
+    context.rag_results_json = _require_dict_payload("rag", rag_output)
+    _record_step_timing(context, "rag_ms", step_started)
+
+
+def _run_llm_step(context: AnalysisContext) -> None:
+    step_started = perf_counter()
+    llm_output = _run_llm(
+        context.full_text,
+        context.nutrition_json,
+        context.rag_results_json,
+        context.ingredient_terms,
+        context.ingredients_text,
+    )
+    context.llm_output_json = _require_dict_payload("llm", llm_output)
+    context.llm_output_json = _ensure_ingredient_coverage(
+        context.llm_output_json,
+        context.ingredient_terms,
+        context.rag_results_json,
+    )
+    context.score = _extract_score(context.llm_output_json)
+    _record_step_timing(context, "llm_ms", step_started)
+
+
+def _persist_result_step(context: AnalysisContext) -> None:
+    if context.full_text_result is None:
+        raise AnalysisPayloadError("full_text_result is missing")
+
+    context.artifact_urls = _persist_analysis_artifacts(
+        task_id=context.task_id,
+        user_id=context.user_id,
+        source_image_key=context.image_key,
+        bbox=context.bbox,
+        masked_full_image=context.masked_full_image if context.bbox else None,
+        cropped_image=context.cropped_image if context.bbox else None,
+        full_text_result=context.full_text_result,
+        table_result=context.table_result,
+        nutrition_json=context.nutrition_json,
+        rag_results_json=context.rag_results_json,
+        llm_output_json=context.llm_output_json,
+    )
+    _complete_task_with_report(
+        task_id=context.task_id,
+        user_id=context.user_id,
+        ingredients_text=context.ingredients_text,
+        nutrition_json=context.nutrition_json,
+        rag_results_json=context.rag_results_json,
+        llm_output_json=context.llm_output_json,
+        score=context.score,
+        artifact_urls=context.artifact_urls,
+    )
+
+
+def run_analysis_pipeline(task_id: str, image_key: str, user_id: str) -> AnalysisContext:
+    context = AnalysisContext(task_id=task_id, image_key=image_key, user_id=user_id)
+    _download_source_image(context)
+    _detect_and_prepare_images(context)
+    _run_ocr_step(context)
+    _parse_nutrition_step(context)
+    _extract_ingredients_step(context)
+    _retrieve_rag_step(context)
+    _run_llm_step(context)
+    _persist_result_step(context)
+    return context
+
 @celery_app.task(
     bind=True,
     name="analysis.process_image",
@@ -191,107 +362,8 @@ def process_image_task(
     timings: dict[str, int] = {}
 
     try:
-        step_started = perf_counter()
-        image_bytes = _download_image(image_key)
-        timings["download_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        bbox = yolo_worker.detect(image_bytes)
-        cropped_image = (
-            yolo_worker.crop_image(image_bytes, bbox) if bbox else image_bytes
-        )
-        masked_full_image = (
-            yolo_worker.mask_image(image_bytes, bbox) if bbox else image_bytes
-        )
-        timings["yolo_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        if bbox:
-            full_text_result, table_result = _run_ocr_with_bbox_fallback(
-                task_id=task_id,
-                image_bytes=image_bytes,
-                masked_full_image=masked_full_image,
-                cropped_image=cropped_image,
-            )
-        else:
-            full_text_result = _run_ocr_full_text(image_bytes)
-            try:
-                table_result = _run_ocr_table(image_bytes)
-            except OCRServiceError as exc:
-                record_external_dependency_error(
-                    service="ocr",
-                    operation="nutrition_table_full_image_scan",
-                    error_type=type(exc).__name__,
-                )
-                logger.warning(
-                    "nutrition_table_full_image_scan_failed",
-                    task_id=task_id,
-                    error_message=str(exc),
-                )
-                table_result = None
-        full_text = full_text_result.raw_text
-        timings["ocr_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        nutrition_output = nutrition_extractor.parse(
-            table_result.model_dump() if table_result else None,
-            (
-                table_result.ocr_fallback_text
-                if table_result and table_result.ocr_fallback_text
-                else full_text or None
-            ),
-        )
-        nutrition_json = _require_dict_payload("nutrition", nutrition_output)
-        timings["nutrition_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        ingredient_terms, ingredients_text = ingredient_extractor.extract(full_text)
-        timings["ingredients_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        rag_output = _run_rag(ingredient_terms, ingredients_text)
-        rag_results_json = _require_dict_payload("rag", rag_output)
-        timings["rag_ms"] = int((perf_counter() - step_started) * 1000)
-
-        step_started = perf_counter()
-        llm_output = _run_llm(
-            full_text,
-            nutrition_json,
-            rag_results_json,
-            ingredient_terms,
-            ingredients_text,
-        )
-        llm_output_json = _require_dict_payload("llm", llm_output)
-        llm_output_json = _ensure_ingredient_coverage(
-            llm_output_json,
-            ingredient_terms,
-            rag_results_json,
-        )
-        score = _extract_score(llm_output_json)
-        timings["llm_ms"] = int((perf_counter() - step_started) * 1000)
-
-        _complete_task_with_report(
-            task_id=task_id,
-            user_id=user_id,
-            ingredients_text=ingredients_text,
-            nutrition_json=nutrition_json,
-            rag_results_json=rag_results_json,
-            llm_output_json=llm_output_json,
-            score=score,
-            artifact_urls=_persist_analysis_artifacts(
-                task_id=task_id,
-                user_id=user_id,
-                source_image_key=image_key,
-                bbox=bbox,
-                masked_full_image=masked_full_image if bbox else None,
-                cropped_image=cropped_image if bbox else None,
-                full_text_result=full_text_result,
-                table_result=table_result,
-                nutrition_json=nutrition_json,
-                rag_results_json=rag_results_json,
-                llm_output_json=llm_output_json,
-            ),
-        )
+        context = run_analysis_pipeline(task_id, image_key, user_id)
+        timings = context.timings
         total_elapsed_ms = _elapsed_ms_since(started_at)
         _record_task_attempt_metrics(
             status=TaskStatus.COMPLETED.value,

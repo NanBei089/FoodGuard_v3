@@ -245,6 +245,10 @@ def test_analysis_upload_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         delete_image=AsyncMock(),
     )
+    events: list[str] = []
+
+    async def fake_commit() -> None:
+        events.append("commit")
 
     async def override_db():
         yield fake_db
@@ -263,8 +267,12 @@ def test_analysis_upload_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
         "create_task_with_limit_guard",
         AsyncMock(return_value=fake_task),
     )
-    update_celery_task_id = AsyncMock()
-    send_task = Mock(return_value=SimpleNamespace(id="broker-generated-id"))
+    update_celery_task_id = AsyncMock(side_effect=lambda *args: events.append("update"))
+    fake_db.commit = AsyncMock(side_effect=fake_commit)
+    send_task = Mock(
+        side_effect=lambda *args, **kwargs: events.append("send")
+        or SimpleNamespace(id="broker-generated-id")
+    )
     monkeypatch.setattr(api_module, "update_celery_task_id", update_celery_task_id)
     monkeypatch.setattr(api_module.celery_app, "send_task", send_task)
 
@@ -290,6 +298,7 @@ def test_analysis_upload_route_success(monkeypatch: pytest.MonkeyPatch) -> None:
         expected_celery_task_id,
         fake_db,
     )
+    assert events == ["update", "commit", "send"]
 
 
 def test_analysis_upload_route_rolls_back_when_enqueue_fails(
@@ -334,6 +343,13 @@ def test_analysis_upload_route_rolls_back_when_enqueue_fails(
         "create_task_with_limit_guard",
         AsyncMock(return_value=fake_task),
     )
+    monkeypatch.setattr(api_module, "update_celery_task_id", AsyncMock())
+    mark_task_enqueue_failed = AsyncMock()
+    monkeypatch.setattr(
+        api_module,
+        "mark_task_enqueue_failed",
+        mark_task_enqueue_failed,
+    )
     monkeypatch.setattr(
         api_module.celery_app,
         "send_task",
@@ -348,6 +364,12 @@ def test_analysis_upload_route_rolls_back_when_enqueue_fails(
 
     assert response.status_code == 503
     fake_db.rollback.assert_not_awaited()
+    assert fake_db.commit.await_count == 2
+    mark_task_enqueue_failed.assert_awaited_once_with(
+        fake_task.id,
+        "分析任务入队失败",
+        fake_db,
+    )
     storage.delete_image.assert_awaited_once_with("uploads/key.png")
 
 

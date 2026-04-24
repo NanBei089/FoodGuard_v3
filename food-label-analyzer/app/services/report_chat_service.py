@@ -308,8 +308,8 @@ async def stream_report_chat(
     conversation.updated_at = datetime.now(timezone.utc)
     db.add(user_message)
     await db.flush()
-    await db.commit()
     await db.refresh(user_message)
+    await db.commit()
 
     async def event_stream() -> AsyncIterator[str]:
         yield _encode_sse_event(
@@ -352,6 +352,17 @@ async def stream_report_chat(
             )
         except Exception as exc:
             await db.rollback()
+            try:
+                await db.delete(user_message)
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.warning(
+                    "report_chat_user_message_cleanup_failed",
+                    report_id=str(report_id),
+                    user_id=str(user_id),
+                    user_message_id=str(user_message.id),
+                )
             failure_kind = "validation_error"
             if isinstance(exc, LLMServiceError):
                 failure_kind = "llm_error"

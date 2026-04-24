@@ -45,6 +45,7 @@ STOP_PATTERNS = [
         r"\u7535\u8bdd",
         r"\u5ba2\u670d",
         r"\u4ea7\u5730",
+        r"\u81f4\u654f\u539f",
         r"\u8425\u517b\u6210\u5206",
         r"\u8425\u517b\u6210\u4efd",
         r"\n\s*\n",
@@ -64,9 +65,26 @@ RIGHT_BRACKETS = {"\uff09", ")", "\u3011"}
 COMPOUND_PATTERN = re.compile(
     r"^(.+?)[\uff08(\u3010](.+?)[\uff09)\u3011]$"
 )
-ADDITION_PATTERN = re.compile(
-    r"[\uff08(]?\s*(?:\u6dfb\u52a0\u91cf|\u542b\u91cf)\s*[\u2265\u2267><]?\s*\d+\.?\d*\s*%?\s*[\uff09)]?"
+AMOUNT_QUALIFIER_PATTERN = re.compile(
+    r"[\uff08(]\s*(?:\u6dfb\u52a0\u91cf|\u542b\u91cf)\s*[\u2265\u2264><]\s*\d+\.?\d*\s*%?\s*[\uff09)]$"
 )
+COMPARISON_OPERATOR_SPACE_PATTERN = re.compile(r"\s*([\u2265\u2264><])\s*")
+
+
+def _normalize_comparison_operators(text: str) -> str:
+    normalized = (
+        text.replace("\\geqslant", "\u2265")
+        .replace("\\leqslant", "\u2264")
+        .replace("\u2267", "\u2265")
+        .replace("\u2266", "\u2264")
+    )
+    normalized = re.sub(r">\s*=", "\u2265", normalized)
+    normalized = re.sub(r"<\s*=", "\u2264", normalized)
+    return COMPARISON_OPERATOR_SPACE_PATTERN.sub(r"\1", normalized)
+
+
+def _is_amount_qualified_ingredient(text: str) -> bool:
+    return bool(AMOUNT_QUALIFIER_PATTERN.search(text))
 
 
 def _get_llm_client() -> OpenAI:
@@ -80,7 +98,7 @@ def _get_llm_client() -> OpenAI:
 
 
 def _clean_ingredient(text: str) -> str:
-    cleaned = ADDITION_PATTERN.sub("", text).strip()
+    cleaned = _normalize_comparison_operators(text).strip()
     return cleaned.strip("\uff08\uff09\u3010\u3011\u3001\uff0c;\uff1b ")
 
 
@@ -170,9 +188,15 @@ def split_ingredients(text: str) -> list[str]:
 
 def expand_compound_ingredients(items: list[str]) -> list[str]:
     expanded: list[str] = []
-    for item in items:
-        candidate = item.strip()
+    for item in _merge_fragmented_ingredient_terms(items):
+        candidate = _normalize_comparison_operators(item.strip())
         if not candidate:
+            continue
+
+        if _is_amount_qualified_ingredient(candidate):
+            cleaned_item = candidate.strip("\u3001\uff0c;\uff1b ")
+            if cleaned_item:
+                expanded.append(cleaned_item)
             continue
 
         match = COMPOUND_PATTERN.match(candidate)
@@ -191,6 +215,29 @@ def expand_compound_ingredients(items: list[str]) -> list[str]:
                 continue
             expanded.append(cleaned_item)
     return _deduplicate_keep_order(expanded)
+
+
+def _merge_fragmented_ingredient_terms(items: list[str]) -> list[str]:
+    merged: list[str] = []
+    index = 0
+
+    while index < len(items):
+        current = _normalize_comparison_operators(items[index].strip())
+        next_item = (
+            _normalize_comparison_operators(items[index + 1].strip())
+            if index + 1 < len(items)
+            else ""
+        )
+
+        if current == "\u5355" and next_item.startswith("\u53cc"):
+            merged.append(f"{current}\u3001{next_item}")
+            index += 2
+            continue
+
+        merged.append(items[index])
+        index += 1
+
+    return merged
 
 
 def _llm_extract(full_raw_text: str) -> list[str]:

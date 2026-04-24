@@ -790,6 +790,56 @@ def test_ingredient_extract_rule_and_expand(monkeypatch: pytest.MonkeyPatch) -> 
     assert ingredients == ["白砂糖", "复合调味料", "食盐", "味精", "水"]
 
 
+def test_ingredient_extract_stops_before_allergen_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ingredient_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.ingredient_extractor")
+    )
+
+    ingredients, raw_text = ingredient_module.extract(
+        "配料表：植物蛋白液（水）、食用葡萄糖\n"
+        "致敏原信息：乳、花生、坚果及其果仁类、芝麻成分的食品\n"
+        "制粒员：张三"
+    )
+
+    assert raw_text == "植物蛋白液（水）、食用葡萄糖"
+    assert ingredients == ["植物蛋白液", "水", "食用葡萄糖"]
+
+
+def test_ingredient_extract_preserves_additive_amount_qualifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ingredient_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.ingredient_extractor")
+    )
+
+    ingredients, raw_text = ingredient_module.extract(
+        "配料：黄油（添加量\\geqslant4%）、水\n净含量 200g"
+    )
+
+    assert raw_text == "黄油（添加量\\geqslant4%）、水"
+    assert ingredients == ["黄油（添加量≥4%）", "水"]
+
+
+def test_ingredient_extract_keeps_mono_and_diglycerides_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ingredient_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.ingredient_extractor")
+    )
+
+    ingredients, raw_text = ingredient_module.extract(
+        "配料：单、双甘油脂肪酸酯（添加量\\geqslant2.5%）、水\n净含量 200g"
+    )
+
+    assert raw_text == "单、双甘油脂肪酸酯（添加量\\geqslant2.5%）、水"
+    assert ingredients == ["单、双甘油脂肪酸酯（添加量≥2.5%）", "水"]
+
+
 def test_ingredient_extract_llm_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     load_required_env(monkeypatch)
     ingredient_module = importlib.reload(

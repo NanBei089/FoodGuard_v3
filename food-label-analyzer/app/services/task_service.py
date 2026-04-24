@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from datetime import datetime, timezone
 from typing import Literal, cast
 
 from fastapi import UploadFile
@@ -137,6 +138,17 @@ async def update_celery_task_id(
         await db.flush()
 
 
+async def mark_task_enqueue_failed(
+    task_id: uuid.UUID, error_message: str, db: AsyncSession
+) -> None:
+    task = await db.get(AnalysisTask, task_id)
+    if task is not None:
+        task.status = TaskStatus.FAILED
+        task.error_message = error_message
+        task.completed_at = datetime.now(timezone.utc)
+        await db.flush()
+
+
 async def get_task_with_permission(
     task_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -188,6 +200,7 @@ __all__ = [
     "create_task_with_limit_guard",
     "get_task_status_payload",
     "get_task_with_permission",
+    "mark_task_enqueue_failed",
     "update_celery_task_id",
     "validate_file",
 ]

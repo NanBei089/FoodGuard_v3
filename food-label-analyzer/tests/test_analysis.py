@@ -842,6 +842,11 @@ def test_process_image_task_completes_with_report_payload(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not run")),
     )
     monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_nutrition_table",
+        lambda image_bytes: TableRecognitionResult(ocr_fallback_text=""),
+    )
+    monkeypatch.setattr(
         analysis_task_module.nutrition_extractor,
         "parse",
         lambda table_result, ocr_fallback_text=None: {
@@ -897,11 +902,168 @@ def test_process_image_task_completes_with_report_payload(
         analysis_task_module.process_image_task.pop_request()
 
     assert result["status"] == "completed"
-    assert completions[0]["score"] == 88
+    assert completions[0]["score"] == 80
+    assert completions[0]["llm_output_json"]["score"] == 80
     assert completions[0]["nutrition_json"]["parse_method"] == "ocr_text"
     assert completions[0]["artifact_urls"] == {
         "ocr_full_json_url": "https://example.com/ocr.json"
     }
+
+
+def test_process_image_task_overrides_llm_score_with_rule_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    completions: list[dict[str, object]] = []
+    nutrition_payload = {
+        "items": [
+            {
+                "name": "钠",
+                "value": "2000",
+                "unit": "mg",
+                "daily_reference_percent": "100%",
+            }
+        ],
+        "parse_method": "ocr_text",
+    }
+    ingredient_payload = {
+        "name": "苯甲酸钠",
+        "risk": "danger",
+        "description": "常见防腐剂，摄入频率较高时需要重点关注总量。",
+        "function_category": "防腐剂",
+        "rules": ["GB2760-2024"],
+    }
+
+    from app.schemas.analysis_data import IngredientItem, NutritionData
+    from app.services.score_calculator import calculate_health_score
+
+    expected_score, _ = calculate_health_score(
+        NutritionData.model_validate(nutrition_payload),
+        [IngredientItem.model_validate(ingredient_payload)],
+    )
+
+    monkeypatch.setattr(
+        analysis_task_module, "_update_task_status", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module, "_download_image", lambda image_key: b"img"
+    )
+    monkeypatch.setattr(
+        analysis_task_module.yolo_worker, "detect", lambda image_bytes: None
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_full_text",
+        lambda image_bytes: OCRTextResult(
+            raw_text="配料：苯甲酸钠",
+            lines=[{"text": "配料：苯甲酸钠"}],
+            blocks=[],
+        ),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ocr_worker,
+        "recognize_nutrition_table",
+        lambda image_bytes: TableRecognitionResult(ocr_fallback_text="钠 2000mg 100%"),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.nutrition_extractor,
+        "parse",
+        lambda table_result, ocr_fallback_text=None: nutrition_payload,
+    )
+    monkeypatch.setattr(
+        analysis_task_module.ingredient_extractor,
+        "extract",
+        lambda full_raw_text: (["苯甲酸钠"], "配料：苯甲酸钠"),
+    )
+    monkeypatch.setattr(
+        analysis_task_module.rag_worker,
+        "retrieve_all",
+        lambda ingredient_terms, ingredients_text: {
+            "source_file": "chromadb",
+            "ingredients_text": ingredients_text,
+            "items_total": 1,
+            "retrieval_results": [],
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module.llm_worker,
+        "analyze",
+        lambda *args, **kwargs: {
+            "score": 99,
+            "summary": "S" * 60,
+            "ingredients": [ingredient_payload],
+            "health_advice": _health_advice_payload(),
+        },
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_persist_analysis_artifacts",
+        lambda **kwargs: {"ocr_full_json_url": "https://example.com/ocr.json"},
+    )
+    monkeypatch.setattr(
+        analysis_task_module,
+        "_complete_task_with_report",
+        lambda **kwargs: completions.append(kwargs),
+    )
+
+    analysis_task_module.process_image_task.push_request(id="celery-1", retries=0)
+    try:
+        result = analysis_task_module.process_image_task.run(
+            "task-id", "image-key", str(uuid.uuid4())
+        )
+    finally:
+        analysis_task_module.process_image_task.pop_request()
+
+    assert result["status"] == "completed"
+    assert expected_score != 99
+    assert completions[0]["score"] == expected_score
+    assert completions[0]["llm_output_json"]["score"] == expected_score
+
+
+def test_parse_nutrition_step_includes_full_ocr_text_as_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    analysis_task_module = importlib.reload(
+        importlib.import_module("app.tasks.analysis_task")
+    )
+    captured: dict[str, object] = {}
+    context = analysis_task_module.AnalysisContext(
+        task_id="task-id",
+        image_key="image-key",
+        user_id=str(uuid.uuid4()),
+        table_result=TableRecognitionResult(
+            table_json={
+                "rows": [
+                    ["营养成分表 NRV% 每100g 项目 4% 359kJ 能量 0%"],
+                ]
+            },
+            ocr_fallback_text="营养成分表 NRV% 每100g 项目 4% 359kJ 能量 0%",
+        ),
+        full_text=(
+            "<table><tr><td>项目</td><td>每100g</td><td>NRV%</td></tr>"
+            "<tr><td>能量</td><td>359kJ</td><td>4%</td></tr></table>"
+        ),
+    )
+
+    def fake_parse(table_result, ocr_fallback_text=None):
+        captured["table_result"] = table_result
+        captured["ocr_fallback_text"] = ocr_fallback_text
+        return {"items": [], "parse_method": "table_recognition"}
+
+    monkeypatch.setattr(
+        analysis_task_module.nutrition_extractor,
+        "parse",
+        fake_parse,
+    )
+
+    analysis_task_module._parse_nutrition_step(context)
+
+    assert "359kJ 能量" in str(captured["ocr_fallback_text"])
+    assert "<table>" in str(captured["ocr_fallback_text"])
 
 
 def test_process_image_task_records_metrics_for_completion(

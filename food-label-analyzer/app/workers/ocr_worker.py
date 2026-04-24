@@ -102,11 +102,21 @@ def _prepare_remote_ocr_input(image_bytes: bytes) -> bytes:
 def _extract_layout_results(raw_result: Any) -> list[Any]:
     if not isinstance(raw_result, dict):
         return []
+    collected: list[Any] = []
+    direct_layout_results = raw_result.get("layoutParsingResults")
+    if isinstance(direct_layout_results, list):
+        collected.extend(direct_layout_results)
+
     results = raw_result.get("results", [])
-    if not results or not isinstance(results[0], dict):
-        return []
-    layout_results = results[0].get("layoutParsingResults", [])
-    return layout_results if isinstance(layout_results, list) else []
+    if isinstance(results, list):
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            layout_results = item.get("layoutParsingResults")
+            if isinstance(layout_results, list):
+                collected.extend(layout_results)
+
+    return collected
 
 
 def _build_full_text_result(raw_result: Any) -> OCRTextResult:

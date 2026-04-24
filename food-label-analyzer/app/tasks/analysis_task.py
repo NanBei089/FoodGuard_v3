@@ -6,6 +6,7 @@ from typing import Any, Protocol, TypeVar, overload
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
+from pydantic import ValidationError
 
 from app.core.errors import (
     AnalysisPayloadError,
@@ -19,6 +20,8 @@ from app.core.metrics import (
     record_external_dependency_error,
 )
 from app.models.analysis_task import TaskStatus
+from app.schemas.analysis_data import IngredientItem, NutritionData, RAGResults
+from app.services.score_calculator import calculate_health_score
 from app.tasks.analysis.artifacts import _persist_analysis_artifacts
 from app.tasks.analysis.ingredient_fallback import _ensure_ingredient_coverage
 from app.tasks.analysis.ocr_strategy import (
@@ -112,13 +115,27 @@ def _require_dict_payload(payload_name: str, value: Any) -> dict[str, Any]:
     return plain_value
 
 
-def _extract_score(llm_output_json: dict[str, Any]) -> int:
-    raw_score = llm_output_json.get("score", 0)
+def _calculate_rule_based_score(
+    nutrition_json: dict[str, Any],
+    rag_results_json: dict[str, Any],
+    llm_output_json: dict[str, Any],
+) -> int:
+    raw_ingredients = llm_output_json.get("ingredients")
+    if not isinstance(raw_ingredients, list):
+        raise AnalysisPayloadError("llm ingredients payload must be a list")
+
     try:
-        score = int(raw_score)
-    except (TypeError, ValueError):
-        score = 0
-    return max(0, min(100, score))
+        nutrition_data = NutritionData.model_validate(nutrition_json)
+        rag_results = RAGResults.model_validate(rag_results_json)
+        ingredients = [
+            IngredientItem.model_validate(item)
+            for item in raw_ingredients
+        ]
+    except ValidationError as exc:
+        raise AnalysisPayloadError("score input payload is invalid") from exc
+
+    score, _ = calculate_health_score(nutrition_data, ingredients, rag_results)
+    return score
 
 
 def _elapsed_ms_since(started_at: float) -> int:
@@ -253,13 +270,17 @@ def _run_ocr_step(context: AnalysisContext) -> None:
 def _parse_nutrition_step(context: AnalysisContext) -> None:
     step_started = perf_counter()
     table_result = context.table_result
+    fallback_parts: list[str] = []
+    if table_result and table_result.ocr_fallback_text:
+        fallback_parts.append(table_result.ocr_fallback_text.strip())
+    if context.full_text and context.full_text.strip():
+        full_text = context.full_text.strip()
+        if full_text not in fallback_parts:
+            fallback_parts.append(full_text)
+
     nutrition_output = nutrition_extractor.parse(
         table_result.model_dump() if table_result else None,
-        (
-            table_result.ocr_fallback_text
-            if table_result and table_result.ocr_fallback_text
-            else context.full_text or None
-        ),
+        "\n\n".join(fallback_parts) or None,
     )
     context.nutrition_json = _require_dict_payload("nutrition", nutrition_output)
     _record_step_timing(context, "nutrition_ms", step_started)
@@ -295,7 +316,12 @@ def _run_llm_step(context: AnalysisContext) -> None:
         context.ingredient_terms,
         context.rag_results_json,
     )
-    context.score = _extract_score(context.llm_output_json)
+    context.score = _calculate_rule_based_score(
+        context.nutrition_json,
+        context.rag_results_json,
+        context.llm_output_json,
+    )
+    context.llm_output_json["score"] = context.score
     _record_step_timing(context, "llm_ms", step_started)
 
 

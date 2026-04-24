@@ -316,6 +316,47 @@ def test_ocr_recognize_nutrition_table_normalizes_payload(
     assert result.table_json["rows"][1] == ["能量", "100kJ", "1%"]
 
 
+def test_ocr_recognize_nutrition_table_reads_layout_from_later_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
+    table_html = (
+        "<table><tr><td>项目</td><td>每100g</td><td>NRV%</td></tr>"
+        "<tr><td>钠</td><td>800mg</td><td>40%</td></tr></table>"
+    )
+    monkeypatch.setattr(
+        ocr_module,
+        "_get_remote_nutrition_ocr_engine",
+        lambda: SimpleNamespace(
+            ocr=lambda _: {
+                "results": [
+                    {"lines": [{"text": "配料：水、食用盐"}]},
+                    {
+                        "layoutParsingResults": [
+                            {
+                                "prunedResult": {
+                                    "parsing_res_list": [
+                                        {
+                                            "block_label": "table",
+                                            "block_content": table_html,
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                ]
+            }
+        ),
+    )
+
+    result = ocr_module.recognize_nutrition_table(_image_bytes((32, 32)))
+
+    assert result.table_json is not None
+    assert result.table_json["rows"][1] == ["钠", "800mg", "40%"]
+
+
 def test_ocr_warmup_probes_remote_engines(monkeypatch: pytest.MonkeyPatch) -> None:
     load_required_env(monkeypatch)
     ocr_module = importlib.reload(importlib.import_module("app.workers.ocr_worker"))
@@ -720,6 +761,113 @@ def test_nutrition_parse_falls_back_to_ocr_text(
     assert result["parse_method"] == "ocr_text"
     assert len(result["items"]) == 2
     assert result["items"][1]["recommendation"] == "可作为补充来源"
+
+
+def test_nutrition_parse_retries_ocr_text_when_table_result_has_no_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    nutrition_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.nutrition_extractor")
+    )
+    calls: list[tuple[dict[str, object] | None, str | None]] = []
+
+    def fake_llm_parse(table_result, nutrition_raw_text=None):
+        calls.append((table_result, nutrition_raw_text))
+        if table_result is not None:
+            return {
+                "items": [],
+                "serving_size": None,
+                "advice_summary": None,
+                "parse_method": "table_recognition",
+            }
+        return {
+            "items": [
+                {
+                    "name": "能量",
+                    "value": "359",
+                    "unit": "kJ",
+                    "daily_reference_percent": "4%",
+                    "level": "neutral",
+                    "recommendation": "能量负担较轻",
+                }
+            ],
+            "serving_size": "每100g",
+            "advice_summary": "该食品能量负担较轻，建议结合配料综合判断。",
+            "parse_method": "ocr_text",
+        }
+
+    monkeypatch.setattr(nutrition_module, "_llm_parse", fake_llm_parse)
+
+    result = nutrition_module.parse(
+        {
+            "table_json": {
+                "rows": [
+                    ["营养成分表 NRV% 每100g 项目 4% 359kJ 能量 0%"],
+                    ["0g 蛋白质 0g 0% 脂肪 21.1g 7% 碳水化合物 28mg 钠 1%"],
+                ]
+            }
+        },
+        "营养成分表\n项目 每100g NRV%\n能量 359kJ 4%",
+    )
+
+    assert result["parse_method"] == "ocr_text"
+    assert result["items"][0]["name"] == "能量"
+    assert calls[0][0] is not None
+    assert calls[1][0] is None
+
+
+def test_nutrition_parse_extracts_html_table_when_llm_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    nutrition_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.nutrition_extractor")
+    )
+    monkeypatch.setattr(
+        nutrition_module,
+        "_llm_parse",
+        lambda table_result, nutrition_raw_text=None: {
+            "items": [],
+            "serving_size": None,
+            "advice_summary": None,
+            "parse_method": "table_recognition" if table_result else "ocr_text",
+        },
+    )
+
+    html_text = (
+        "<table><tr><td>项目</td><td>每100g</td><td>NRV%</td></tr>"
+        "<tr><td>能量</td><td>359kJ</td><td>4%</td></tr>"
+        "<tr><td>蛋白质</td><td>0g</td><td>0%</td></tr>"
+        "<tr><td>脂肪</td><td>0g</td><td>0%</td></tr>"
+        "<tr><td>碳水化合物</td><td>21.1g</td><td>7%</td></tr>"
+        "<tr><td>钠</td><td>28mg</td><td>1%</td></tr></table>"
+    )
+
+    result = nutrition_module.parse(
+        {
+            "table_json": {
+                "rows": [
+                    ["营养成分表 NRV% 每100g 项目 4% 359kJ 能量 0%"],
+                    ["0g 蛋白质 0g 0% 脂肪 21.1g 7% 碳水化合物 28mg 钠 1%"],
+                ]
+            }
+        },
+        html_text,
+    )
+
+    assert result["parse_method"] == "ocr_text"
+    assert result["serving_size"] == "每100g"
+    assert [item["name"] for item in result["items"]] == [
+        "能量",
+        "蛋白质",
+        "脂肪",
+        "碳水化合物",
+        "钠",
+    ]
+    assert result["items"][0]["value"] == "359"
+    assert result["items"][0]["unit"] == "kJ"
+    assert result["items"][4]["daily_reference_percent"] == "1%"
 
 
 def test_nutrition_parse_returns_failed_when_llm_parse_fails(

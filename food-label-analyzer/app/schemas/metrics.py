@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,14 +11,17 @@ from app.schemas.common import BASE_MODEL_CONFIG
 
 
 class _MetricsSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
 class ProcessMetricsSchema(_MetricsSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     pid: int = Field(description="Current process ID", examples=[12345])
 
 
 class HistogramMetricsSchema(_MetricsSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     count: int = Field(description="Observed sample count", examples=[12])
     sum_ms: int = Field(description="Observed total in milliseconds", examples=[3400])
     min_ms: int | None = Field(description="Minimum observed duration", examples=[12])
@@ -28,11 +34,13 @@ class HistogramMetricsSchema(_MetricsSchema):
 
 
 class CounterMetricsItemSchema(_MetricsSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     labels: dict[str, str] = Field(description="Metric label set")
     value: int = Field(description="Counter value", examples=[3])
 
 
 class MetricsSnapshotResponse(_MetricsSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     generated_at: datetime = Field(
         description="Snapshot generation time",
         examples=["2026-04-17T12:30:00Z"],

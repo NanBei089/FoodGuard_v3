@@ -1,3 +1,6 @@
+"""营养成分解析器，优先读表格结构，失败时再从 OCR 文本兜底解析。"""
+
+
 from __future__ import annotations
 
 import json
@@ -20,10 +23,32 @@ _VALUE_UNIT_PATTERN = re.compile(
     r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>kJ|kj|KJ|kcal|Kcal|mg|g|ug|μg|克|毫克|千焦)",
     re.IGNORECASE,
 )
-_PERCENT_PATTERN = re.compile(r"\d+(?:\.\d+)?\s*%")
+_PERCENT_PATTERN = re.compile(r"(?:\d+(?:\.\d+)?\s*%|%\s*\d+(?:\.\d+)?)")
+_PLAIN_NUTRIENT_TOKENS = (
+    "反式脂肪",
+    "饱和脂肪",
+    "碳水化合物",
+    "膳食纤维",
+    "胆固醇",
+    "蛋白质",
+    "总脂肪",
+    "维生素",
+    "脂肪",
+    "能量",
+    "热量",
+    "糖",
+    "钠",
+    "钙",
+    "铁",
+    "锌",
+    "钾",
+    "镁",
+)
+_PLAIN_TEXT_HEADER_TOKENS = {"营养成分表", "项目", "NRV", "NRV%"}
 
 
 class _NutritionHTMLTableParser(HTMLParser):
+    """把 OCR 返回的 HTML 表格解析成行列数据。"""
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.tables: list[list[list[str]]] = []
@@ -94,9 +119,20 @@ def _build_result(
 
 
 def _normalize_cell_text(value: Any) -> str:
+    """去掉单元格里的多余空白。"""
     if value is None:
         return ""
     return re.sub(r"\s+", "", str(value)).strip()
+
+
+def _normalize_ocr_value_text(value: Any) -> str:
+    """修正 OCR 常见误读，比如把 Og 当成 0g。"""
+    normalized = str(value or "")
+    return re.sub(
+        r"(?i)(?<![a-z])[oO](?=\s*(?:g|mg|ug|μg|kj|kcal|克|毫克|千焦))",
+        "0",
+        normalized,
+    )
 
 
 def _normalize_unit(unit: str) -> str:
@@ -116,14 +152,19 @@ def _normalize_unit(unit: str) -> str:
 
 
 def _extract_percent(text: str) -> str | None:
+    """从文本里提取 NRV 百分比。"""
     match = _PERCENT_PATTERN.search(text)
     if not match:
         return None
-    return re.sub(r"\s+", "", match.group(0))
+    normalized = re.sub(r"\s+", "", match.group(0))
+    if normalized.startswith("%"):
+        return f"{normalized[1:]}%"
+    return normalized
 
 
 def _extract_value_unit(text: str) -> tuple[str, str] | None:
-    match = _VALUE_UNIT_PATTERN.search(text)
+    """从文本里提取数值和单位。"""
+    match = _VALUE_UNIT_PATTERN.search(_normalize_ocr_value_text(text))
     if not match:
         return None
     return match.group("value"), _normalize_unit(match.group("unit"))
@@ -241,11 +282,115 @@ def _parse_html_tables(nutrition_raw_text: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_plain_nutrient_name(line: str) -> str | None:
+    """从一行 OCR 文本里识别营养素名称，并修正常见错字。"""
+    normalized = _normalize_cell_text(line)
+    if not normalized:
+        return None
+
+    corrected = (
+        normalized.replace("蛋百质", "蛋白质")
+        .replace("蛋自质", "蛋白质")
+        .replace("蛋曰质", "蛋白质")
+    )
+    if corrected in _PLAIN_TEXT_HEADER_TOKENS:
+        return None
+
+    compact = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "", corrected)
+    for token in _PLAIN_NUTRIENT_TOKENS:
+        if token in compact:
+            return corrected
+    return None
+
+
+def _extract_serving_size_from_lines(lines: list[str]) -> str | None:
+    """从 OCR 文本中找出每份或每 100g 的计量口径。"""
+    for line in lines:
+        if re.search(
+            r"每\s*(?:份|100\s*(?:g|克|ml|毫升)|\d+\s*(?:g|克|ml|毫升))",
+            line,
+            re.I,
+        ):
+            return _normalize_cell_text(line)
+    return None
+
+
+def _parse_plain_nutrition_text(
+    nutrition_raw_text: str | None,
+) -> dict[str, Any] | None:
+    """从逐行 OCR 文本里兜底解析营养成分。"""
+    if not nutrition_raw_text:
+        return None
+
+    lines = [
+        line.strip()
+        for line in re.split(r"[\r\n]+", nutrition_raw_text)
+        if line.strip()
+    ]
+    if len(lines) < 3:
+        return None
+
+    items: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines):
+        name = _normalize_plain_nutrient_name(lines[index])
+        if not name:
+            index += 1
+            continue
+
+        value_unit = _extract_value_unit(lines[index])
+        value_index = index
+        if value_unit is None:
+            probe_index = index + 1
+            while (
+                probe_index < len(lines)
+                and _normalize_cell_text(lines[probe_index]) in _PLAIN_TEXT_HEADER_TOKENS
+            ):
+                probe_index += 1
+            if probe_index >= len(lines):
+                break
+            value_unit = _extract_value_unit(lines[probe_index])
+            value_index = probe_index
+
+        if value_unit is None:
+            index += 1
+            continue
+
+        percent = _extract_percent(lines[index])
+        next_index = value_index + 1
+        if percent is None and next_index < len(lines):
+            next_percent = _extract_percent(lines[next_index])
+            if next_percent:
+                percent = next_percent
+                next_index += 1
+
+        items.append(
+            {
+                "name": name,
+                "value": value_unit[0],
+                "unit": value_unit[1],
+                "daily_reference_percent": percent,
+                "level": None,
+                "recommendation": None,
+            }
+        )
+        index = max(index + 1, next_index)
+
+    if not items:
+        return None
+    return _build_result(items, _extract_serving_size_from_lines(lines), "ocr_text")
+
+
 def _parse_structured_nutrition(
     table_result: dict[str, Any] | None,
     nutrition_raw_text: str | None,
 ) -> dict[str, Any] | None:
-    return _parse_table_rows(table_result) or _parse_html_tables(nutrition_raw_text)
+    """按表格、HTML、逐行文本的顺序解析营养成分。"""
+    return (
+        _parse_table_rows(table_result)
+        or _parse_html_tables(nutrition_raw_text)
+        or _parse_plain_nutrition_text(nutrition_raw_text)
+    )
 
 
 def _extract_json_payload(content: str) -> dict[str, Any] | None:
@@ -359,6 +504,7 @@ def _llm_parse(
 
 
 def parse(table_result, ocr_fallback_text: str | None = None) -> dict[str, Any]:
+    """解析输入数据，返回统一的结构化结果。"""
     table_data = (
         table_result.model_dump()
         if hasattr(table_result, "model_dump")

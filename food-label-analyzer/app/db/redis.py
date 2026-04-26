@@ -1,3 +1,6 @@
+"""数据库和 Redis 的连接管理。"""
+
+
 from __future__ import annotations
 
 from redis.asyncio import Redis, from_url

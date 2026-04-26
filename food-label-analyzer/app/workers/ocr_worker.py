@@ -1,3 +1,6 @@
+"""OCR 入口，负责调用 PaddleOCR 并整理全文和表格识别结果。"""
+
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -120,6 +123,7 @@ def _extract_layout_results(raw_result: Any) -> list[Any]:
 
 
 def _build_full_text_result(raw_result: Any) -> OCRTextResult:
+    """把 OCR 原始结果整理成全文识别结果。"""
     lines = _extract_text_lines_with_nested_fallback(raw_result)
     raw_text = "\n".join(line["text"] for line in lines if line["text"])
     result = OCRTextResult(
@@ -164,6 +168,7 @@ def _build_table_json_from_raw_result(
 
 
 def _build_nutrition_table_result(raw_result: Any) -> TableRecognitionResult:
+    """把 OCR 原始结果整理成营养表识别结果。"""
     lines = _extract_text_lines_with_nested_fallback(raw_result)
     raw_text = "\n".join(line["text"] for line in lines if line["text"])
 
@@ -270,6 +275,7 @@ def _log_and_raise_ocr_runtime_failure(
 
 
 def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
+    """识别一张图里的普通文字。"""
     try:
         return _recognize_full_text_remote(image_bytes)
     except _OCR_RUNTIME_EXCEPTIONS as exc:
@@ -282,6 +288,7 @@ def recognize_full_text(image_bytes: bytes) -> OCRTextResult:
 
 
 def recognize_nutrition_table(image_bytes: bytes) -> TableRecognitionResult:
+    """识别一张图里的营养成分表。"""
     try:
         return _recognize_nutrition_table_remote(image_bytes)
     except _OCR_RUNTIME_EXCEPTIONS as exc:
@@ -297,6 +304,7 @@ def recognize_parallel(
     full_text_image_bytes: bytes,
     nutrition_image_bytes: bytes | None = None,
 ) -> OCRParallelResult:
+    """并行识别配料文字和营养成分表。"""
     if nutrition_image_bytes is None:
         nutrition_image_bytes = full_text_image_bytes
 

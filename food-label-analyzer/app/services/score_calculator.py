@@ -1,3 +1,6 @@
+"""健康分计算规则，根据营养、配料、过敏原和检索结果给出分数。"""
+
+
 from __future__ import annotations
 
 import math
@@ -13,9 +16,16 @@ from app.schemas.analysis_data import (
 
 NRV_THRESHOLDS = {
     "sodium": {"low": 20, "medium": 40, "high": 60, "very_high": 80},
-    "sugar": {"low": 10, "medium": 20, "high": 30},
+    "sugar": {"low": 10, "medium": 25, "high": 50, "very_high": 100},
     "total_fat": {"low": 20, "medium": 40, "high": 60},
     "saturated_fat": {"low": 10, "medium": 20, "high": 30},
+}
+
+REFERENCE_LIMITS = {
+    # OCR 只识别到钠含量、没有识别到 NRV% 时，用每日参考值补算占比。
+    "sodium_mg": 2000.0,
+    # 包装标签通常不写糖的 NRV%，这里用每日 50g 作为扣分参考。
+    "sugar_g": 50.0,
 }
 
 ADDITIVE_PENALTIES = {
@@ -37,6 +47,7 @@ ALLERGEN_PENALTIES = {
 
 @dataclass
 class NutritionScore:
+    """营养均衡各项分数和总分。"""
     protein_score: float = 100.0
     fat_score: float = 100.0
     carb_score: float = 100.0
@@ -46,6 +57,7 @@ class NutritionScore:
 
 @dataclass
 class ComponentScores:
+    """健康分的各个组成部分。"""
     nutrition: NutritionScore = field(default_factory=NutritionScore)
     sodium: float = 100.0
     sugar: float = 100.0
@@ -70,6 +82,35 @@ def _parse_nutrition_value(value_str: str) -> float:
         return float(value_str.strip())
     except (ValueError, AttributeError):
         return 0.0
+
+
+def _estimate_nrv_from_amount(item: NutritionItem, reference_key: str) -> float:
+    """把营养含量换算成每日参考值百分比。"""
+    value = _parse_nutrition_value(item.value)
+    if value <= 0:
+        return 0.0
+    unit = item.unit.lower()
+    if reference_key.endswith("_mg") and unit == "g":
+        value *= 1000
+    elif reference_key.endswith("_g") and unit == "mg":
+        value /= 1000
+    reference = REFERENCE_LIMITS[reference_key]
+    return value / reference * 100
+
+
+def _score_limit_nrv(nrv: float) -> float:
+    """按每日参考值占比给糖、钠这类限制营养素打分。"""
+    if nrv <= 0:
+        return 100.0
+    if nrv <= 10:
+        return 100.0
+    if nrv <= 25:
+        return 85.0
+    if nrv <= 50:
+        return 65.0
+    if nrv <= 100:
+        return 35.0
+    return max(10.0, 35.0 - (nrv - 100) * 0.8)
 
 
 def score_nutrition(nutrition_data: NutritionData | None) -> NutritionScore:
@@ -172,7 +213,7 @@ def score_sodium(nutrition_data: NutritionData | None) -> float:
         if "钠" in item.name.lower() or "sodium" in item.name.lower():
             nrv = _parse_nrv(item.daily_reference_percent)
             if nrv == 0:
-                return 80.0
+                nrv = _estimate_nrv_from_amount(item, "sodium_mg")
 
             if nrv <= NRV_THRESHOLDS["sodium"]["low"]:
                 return 100.0
@@ -196,21 +237,12 @@ def score_sugar(nutrition_data: NutritionData | None) -> float:
 
     for item in nutrition_data.items:
         name_lower = item.name.lower()
-        if (
-            "糖" in item.name and ("总" in item.name or "total" in name_lower)
-        ) or "sugar" in name_lower:
+        if "糖" in item.name or "sugar" in name_lower:
             nrv = _parse_nrv(item.daily_reference_percent)
             if nrv == 0:
-                return 80.0
+                nrv = _estimate_nrv_from_amount(item, "sugar_g")
 
-            if nrv <= NRV_THRESHOLDS["sugar"]["low"]:
-                return 100.0
-            elif nrv <= NRV_THRESHOLDS["sugar"]["medium"]:
-                return 80.0
-            elif nrv <= NRV_THRESHOLDS["sugar"]["high"]:
-                return 60.0
-            else:
-                return max(30.0, 60.0 - (nrv - NRV_THRESHOLDS["sugar"]["high"]) * 2)
+            return _score_limit_nrv(nrv)
 
     return 80.0
 
@@ -301,6 +333,7 @@ def calculate_health_score(
     ingredients: list[IngredientItem],
     rag_results: RAGResults | None = None,
 ) -> tuple[int, ComponentScores]:
+    """根据规则计算健康分。"""
     nutrition_score = score_nutrition(nutrition_data)
     sodium_score = score_sodium(nutrition_data)
     sugar_score = score_sugar(nutrition_data)
@@ -316,12 +349,18 @@ def calculate_health_score(
     )
 
     final_score = (
-        nutrition_score.total * 0.30
+        nutrition_score.total * 0.25
         + sodium_score * 0.25
         + additive_score * 0.20
         + allergen_score * 0.15
-        + sugar_score * 0.10
+        + sugar_score * 0.15
     )
+
+    # 糖或钠明显超标时限制总分，避免其它维度把高风险食品拉成高分。
+    if sugar_score <= 30:
+        final_score = min(final_score, 79.0)
+    if sodium_score <= 40:
+        final_score = min(final_score, 75.0)
 
     final_score = max(0.0, min(100.0, final_score))
 
@@ -329,6 +368,7 @@ def calculate_health_score(
 
 
 def format_score_breakdown(component: ComponentScores) -> str:
+    """把数据整理成展示或输出需要的格式。"""
     lines = [
         "【评分明细】",
         f"  营养均衡: {component.nutrition.total:.1f}/100",

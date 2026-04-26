@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,10 +15,12 @@ HealthStatus = Literal["healthy", "degraded"]
 
 
 class _HealthSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
 class HealthServicesSchema(_HealthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     database: ServiceState = Field(
         description="Database connectivity status", examples=["up"]
     )
@@ -40,6 +45,7 @@ class HealthServicesSchema(_HealthSchema):
 
 
 class HealthCheckResponse(_HealthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     status: HealthStatus = Field(
         description="Overall health status", examples=["healthy"]
     )

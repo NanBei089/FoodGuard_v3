@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 from email.mime.multipart import MIMEMultipart
@@ -26,6 +29,7 @@ _EMAIL_RETRYABLE_EXCEPTIONS = (
 
 
 class EmailService:
+    """把一组相关业务操作封装在一起，方便接口层调用。"""
     def __init__(self, settings: Settings) -> None:
         self.host = settings.SMTP_HOST
         self.port = settings.SMTP_PORT

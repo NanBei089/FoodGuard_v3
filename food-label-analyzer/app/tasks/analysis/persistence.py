@@ -1,3 +1,6 @@
+"""Celery 异步任务和分析流程编排。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -59,6 +62,7 @@ def _download_image(image_key: str) -> bytes:
 def _update_task_status(
     task_id: str, status: TaskStatus, error_message: str | None = None
 ) -> None:
+    """更新已有数据或状态。"""
     task_uuid = uuid.UUID(task_id)
     values: dict[str, Any] = {
         "status": status,

@@ -1,3 +1,6 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -14,6 +17,7 @@ if TYPE_CHECKING:
 
 
 class PasswordResetToken(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "password_reset_tokens"
     __table_args__ = (
         Index("idx_password_reset_tokens_user_id", "user_id"),

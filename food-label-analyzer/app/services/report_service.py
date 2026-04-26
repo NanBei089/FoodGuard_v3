@@ -1,3 +1,6 @@
+"""报告服务，负责把数据库里的分析结果整理成前端能直接展示的结构。"""
+
+
 from __future__ import annotations
 
 import asyncio
@@ -356,6 +359,7 @@ def _parse_percentage(value: str | None) -> float | None:
 
 
 def _format_percentage(value: float | None) -> str | None:
+    """把数据整理成展示或输出需要的格式。"""
     if value is None:
         return None
     rounded = round(value, 1)
@@ -374,12 +378,14 @@ def _parse_float(value: str | None) -> float | None:
 
 
 def _format_amount(value: str, unit: str) -> str:
+    """把数据整理成展示或输出需要的格式。"""
     amount = str(value).strip()
     normalized_unit = str(unit or "").strip()
     return f"{amount} {normalized_unit}".strip()
 
 
 def _format_serving_basis(serving_size: str | None) -> str:
+    """把数据整理成展示或输出需要的格式。"""
     if not serving_size:
         return "每100克 (Per 100g)"
 
@@ -719,6 +725,7 @@ async def get_report_list(
 
 
 def _format_nutrition(nutrition_data: NutritionData | None) -> dict[str, str]:
+    """把数据整理成展示或输出需要的格式。"""
     if not nutrition_data or not nutrition_data.items:
         return {}
     
@@ -779,6 +786,7 @@ async def get_report_detail(
 async def delete_report(
     report_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
 ) -> None:
+    """删除指定数据或资源。"""
     result = await db.execute(
         select(Report).where(
             Report.id == report_id,

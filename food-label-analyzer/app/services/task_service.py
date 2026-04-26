@@ -1,3 +1,6 @@
+"""分析任务服务，负责创建任务、查询任务状态和派发异步分析。"""
+
+
 from __future__ import annotations
 
 import io
@@ -132,6 +135,7 @@ async def create_task_with_limit_guard(
 async def update_celery_task_id(
     task_id: uuid.UUID, celery_task_id: str, db: AsyncSession
 ) -> None:
+    """更新已有数据或状态。"""
     task = await db.get(AnalysisTask, task_id)
     if task is not None:
         task.celery_task_id = celery_task_id

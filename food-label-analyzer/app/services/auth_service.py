@@ -1,3 +1,6 @@
+"""认证服务，负责注册、登录、刷新令牌、邮箱验证和密码重置。"""
+
+
 from __future__ import annotations
 
 import random

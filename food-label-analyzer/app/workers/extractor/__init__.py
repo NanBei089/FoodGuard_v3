@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 from app.workers.extractor.ingredient_extractor import extract

@@ -1,3 +1,6 @@
+"""业务逻辑层，负责把接口、数据库和任务流程串起来。"""
+
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +25,7 @@ _CONTENT_TYPE_EXTENSIONS = {
 
 
 class StorageService:
+    """把一组相关业务操作封装在一起，方便接口层调用。"""
     def __init__(self) -> None:
         settings = get_settings()
         self._bucket_name = settings.MINIO_BUCKET_NAME
@@ -106,6 +110,7 @@ class StorageService:
             raise self._raise_storage_error("Failed to create presigned URL", exc)
 
     async def delete_image(self, image_key: str) -> None:
+        """删除指定数据或资源。"""
         try:
             await asyncio.to_thread(
                 self._client.remove_object, self._bucket_name, image_key

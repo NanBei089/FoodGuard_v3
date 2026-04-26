@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from typing import Literal
@@ -20,10 +23,12 @@ SUPPORTED_HEALTH_ADVICE_GROUPS = {
 
 
 class _AnalysisDataSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = ConfigDict(from_attributes=True)
 
 
 class NutritionItem(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     name: str
     value: str
     unit: str
@@ -33,6 +38,7 @@ class NutritionItem(_AnalysisDataSchema):
 
 
 class NutritionData(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     items: list[NutritionItem] = Field(default_factory=list)
     serving_size: str | None = None
     advice_summary: str | None = Field(default=None, min_length=10, max_length=200)
@@ -40,6 +46,7 @@ class NutritionData(_AnalysisDataSchema):
 
 
 class RAGMatch(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     id: str
     term: str
     normalized_term: str
@@ -50,6 +57,7 @@ class RAGMatch(_AnalysisDataSchema):
 
 
 class RAGRetrievalItem(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     raw_term: str
     normalized_term: str
     retrieved: bool
@@ -58,6 +66,7 @@ class RAGRetrievalItem(_AnalysisDataSchema):
 
 
 class RAGResults(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     source_file: str = "chromadb"
     ingredients_text: str = ""
     items_total: int = 0
@@ -65,6 +74,7 @@ class RAGResults(_AnalysisDataSchema):
 
 
 class IngredientItem(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     name: str
     risk: IngredientRisk
     description: str = Field(min_length=10, max_length=120)
@@ -73,6 +83,7 @@ class IngredientItem(_AnalysisDataSchema):
 
 
 class HealthAdviceItem(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     group: HealthAdviceGroup
     risk: IngredientRisk
     advice: str = Field(min_length=30, max_length=120)
@@ -80,11 +91,13 @@ class HealthAdviceItem(_AnalysisDataSchema):
 
 
 class HazardItem(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     level: Literal["high", "medium", "low"] = Field(description="风险等级")
     desc: str = Field(description="风险描述", min_length=5, max_length=100)
 
 
 class FoodHealthAnalysisOutput(_AnalysisDataSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     score: int = Field(ge=0, le=100)
     summary: str = Field(min_length=30, max_length=200)
     nutrition_advice: str | None = Field(default=None, min_length=20, max_length=200)

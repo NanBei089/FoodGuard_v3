@@ -1,3 +1,6 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,6 +14,7 @@ from app.models.enums import VerificationType
 
 
 class EmailVerification(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "email_verifications"
     __table_args__ = (
         Index("idx_email_verifications_email_type", "email", "type"),

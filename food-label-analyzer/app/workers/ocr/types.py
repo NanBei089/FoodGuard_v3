@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,6 +9,7 @@ from typing import Any, Literal
 
 @dataclass(frozen=True)
 class OCRConfig:
+    """保存 `OCRConfig` 相关的数据和方法。"""
     job_url: str
     token: str
     model: str = "PaddleOCR-VL-1.5"
@@ -41,6 +45,7 @@ class OCRConfig:
 
 @dataclass
 class OCRTextResult:
+    """保存某一步处理后的结果。"""
     raw_text: str = ""
     lines: list[dict[str, Any]] = field(default_factory=list)
     blocks: list[dict[str, Any]] = field(default_factory=list)
@@ -59,6 +64,7 @@ class OCRTextResult:
 
 @dataclass
 class TableRecognitionResult:
+    """保存某一步处理后的结果。"""
     table_json: dict[str, Any] | None = None
     table_html_url: str | None = None
     table_xlsx_url: str | None = None
@@ -77,5 +83,6 @@ class TableRecognitionResult:
 
 @dataclass
 class OCRParallelResult:
+    """保存某一步处理后的结果。"""
     full_text: OCRTextResult
     nutrition_table: TableRecognitionResult

@@ -1,23 +1,64 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, FileImage } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  ClipboardCheck,
+  Clock3,
+  Database,
+  FileImage,
+  ImagePlus,
+  Loader2,
+  ScanLine,
+  TableProperties,
+} from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '@/api/client';
 import { Button } from '@/components/ui/Button';
+import {
+  ANALYSIS_STEP_DEFINITIONS,
+  getAnalysisProgress,
+  type AnalysisTaskStatus,
+} from '@/lib/analysis-progress';
 import { getErrorMessage } from '@/lib/api-errors';
+import { cn } from '@/lib/utils';
 
 const INITIAL_POLL_INTERVAL_MS = 1500;
 const MAX_POLL_INTERVAL_MS = 3000;
 const MAX_ANALYSIS_WAIT_MS = 10 * 60 * 1000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
-interface TaskStatus {
-  task_id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  progress_message: string;
-  created_at?: string;
-  report_id: string | null;
-  error_message: string | null;
-}
+type StepStatus = 'pending' | 'processing' | 'completed';
+
+type AnalysisStep = {
+  title: string;
+  description: string;
+  threshold: number;
+  icon: LucideIcon;
+};
+
+const ANALYSIS_STEPS: AnalysisStep[] = [
+  {
+    ...ANALYSIS_STEP_DEFINITIONS[0],
+    icon: ImagePlus,
+  },
+  {
+    ...ANALYSIS_STEP_DEFINITIONS[1],
+    icon: ScanLine,
+  },
+  {
+    ...ANALYSIS_STEP_DEFINITIONS[2],
+    icon: TableProperties,
+  },
+  {
+    ...ANALYSIS_STEP_DEFINITIONS[3],
+    icon: Database,
+  },
+  {
+    ...ANALYSIS_STEP_DEFINITIONS[4],
+    icon: ClipboardCheck,
+  },
+];
 
 function revokePreview(url: string | null) {
   if (url && url.startsWith('blob:')) {
@@ -29,7 +70,7 @@ function revokePreview(url: string | null) {
 export default function Analyzing() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
-  const [status, setStatus] = useState<TaskStatus | null>(null);
+  const [status, setStatus] = useState<AnalysisTaskStatus | null>(null);
   const [error, setError] = useState('');
   const previewUrl = sessionStorage.getItem('latest_upload_preview') || '';
 
@@ -59,7 +100,7 @@ export default function Analyzing() {
       }
 
       try {
-        const res = await apiGet<TaskStatus>(`/analysis/tasks/${taskId}`);
+        const res = await apiGet<AnalysisTaskStatus>(`/analysis/tasks/${taskId}`);
 
         if (res.code !== 0) {
           setError(res.message || '分析任务状态获取失败');
@@ -117,24 +158,13 @@ export default function Analyzing() {
     };
   }, [navigate, previewUrl, taskId]);
 
-  const progressPercentage =
-    status?.status === 'queued'
-      ? 12
-      : status?.status === 'processing' && !status.progress_message.includes('LLM')
-        ? 42
-        : status?.status === 'processing' && status.progress_message.includes('LLM')
-          ? 82
-          : status?.status === 'completed'
-            ? 100
-            : 0;
+  const progress = getAnalysisProgress(status);
 
   return (
-    <div className="flex min-h-[calc(100vh-220px)] items-center justify-center py-6">
-      <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-xl">
-        <div className="absolute left-1/2 top-0 -z-10 h-64 w-64 -translate-x-1/2 rounded-full bg-emerald-400/10 blur-3xl" />
-
+    <div className="flex min-h-[calc(100vh-220px)] items-center justify-center py-4">
+      <div className="w-full max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-200/80">
         {error || status?.status === 'failed' ? (
-          <>
+          <div className="p-8 text-center">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-rose-100 text-rose-600">
               <AlertCircle className="h-8 w-8" />
             </div>
@@ -143,13 +173,13 @@ export default function Analyzing() {
             <Button onClick={() => navigate('/')} className="mt-6 w-full">
               返回首页重试
             </Button>
-          </>
+          </div>
         ) : (
-          <>
-            <div className="mb-8">
-              <div className="relative mx-auto h-48 w-48 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-inner">
+          <div className="grid gap-8 p-6 md:grid-cols-[220px_1fr] md:p-8">
+            <div className="md:pt-1">
+              <div className="relative mx-auto h-48 w-48 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-inner md:h-52 md:w-52">
                 {previewUrl ? (
-                  <img src={previewUrl} alt="分析中" className="h-full w-full object-cover opacity-70" />
+                  <img src={previewUrl} alt="分析中" className="h-full w-full object-contain opacity-80" />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-slate-300">
                     <FileImage className="h-12 w-12" />
@@ -163,56 +193,55 @@ export default function Analyzing() {
               </div>
             </div>
 
-            <h2 className="mb-2 text-2xl font-bold text-slate-900">AI 正在深度分析</h2>
-            <p className="mb-8 h-5 text-sm text-slate-500">
-              {status?.progress_message || '初始化分析引擎中...'}
-            </p>
+            <div>
+              <div className="mb-5 text-left">
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  {progress.headline}
+                </div>
+                <h2 className="text-2xl font-bold text-slate-950 md:text-3xl">AI 正在分析食品标签</h2>
+                <p className="mt-2 min-h-5 text-sm text-slate-500">
+                  {progress.detail}
+                </p>
+              </div>
 
-            <div className="relative mb-2 h-3 w-full overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="progress-bar-fill relative h-full rounded-full bg-emerald-500"
-                style={{ width: `${progressPercentage}%` }}
-              >
-                <div className="absolute inset-0 animate-[pulse_2s_linear_infinite] bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+              <div className="mb-6">
+                <div className="mb-2 flex items-center justify-between text-xs font-medium text-slate-500">
+                  <span>{status?.progress_message || '初始化分析引擎中...'}</span>
+                  <span className="text-emerald-700">{progress.percent}%</span>
+                </div>
+                <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="progress-bar-fill relative h-full rounded-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400"
+                    style={{ width: `${progress.percent}%` }}
+                  >
+                    <div className="absolute inset-0 animate-[pulse_2s_linear_infinite] bg-gradient-to-r from-transparent via-white/45 to-transparent" />
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-between text-[11px] font-medium text-slate-400">
+                  <span>0%</span>
+                  <span>完成后自动进入报告</span>
+                  <span>100%</span>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-left">
+                {ANALYSIS_STEPS.map((step, index) => (
+                  <Step
+                    key={step.title}
+                    step={step}
+                    status={
+                      status?.status === 'completed' || progress.percent >= step.threshold
+                        ? 'completed'
+                        : index === progress.activeStepIndex
+                          ? 'processing'
+                          : 'pending'
+                    }
+                  />
+                ))}
               </div>
             </div>
-            <div className="flex justify-between text-xs font-medium text-slate-400">
-              <span>0%</span>
-              <span className="text-emerald-600">{progressPercentage}%</span>
-              <span>100%</span>
-            </div>
-
-            <div className="mt-8 space-y-4 text-left">
-              <Step title="图片预处理与增强" status={status?.status === 'queued' ? 'processing' : 'completed'} stepNum={1} />
-              <Step
-                title="执行 OCR 文字识别"
-                status={
-                  status?.status === 'processing' && !status.progress_message.includes('LLM')
-                    ? 'processing'
-                    : status?.progress_message.includes('LLM') || status?.status === 'completed'
-                      ? 'completed'
-                      : 'pending'
-                }
-                stepNum={2}
-              />
-              <Step
-                title="大模型成分风险评估"
-                status={
-                  status?.progress_message.includes('LLM')
-                    ? 'processing'
-                    : status?.status === 'completed'
-                      ? 'completed'
-                      : 'pending'
-                }
-                stepNum={3}
-              />
-              <Step
-                title="生成个性化健康报告"
-                status={status?.status === 'completed' ? 'processing' : 'pending'}
-                stepNum={4}
-              />
-            </div>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -220,45 +249,51 @@ export default function Analyzing() {
 }
 
 function Step({
-  title,
+  step,
   status,
-  stepNum,
 }: {
-  title: string;
-  status: 'pending' | 'processing' | 'completed';
-  stepNum: number;
+  step: AnalysisStep;
+  status: StepStatus;
 }) {
+  const Icon = step.icon;
+
   return (
     <div
-      className={`flex items-center gap-3 transition-opacity duration-300 ${
-        status === 'pending' ? 'opacity-40' : status === 'completed' ? 'opacity-50' : ''
-      }`}
-    >
-      {status === 'completed' ? (
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-      ) : status === 'processing' ? (
-        <div className="animate-pulse-fast flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-        </div>
-      ) : (
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-slate-200 text-slate-400">
-          <span className="text-xs">{stepNum}</span>
-        </div>
+      className={cn(
+        'flex items-start gap-3 rounded-2xl border p-3 transition-colors duration-300',
+        status === 'completed' && 'border-emerald-100 bg-emerald-50/70',
+        status === 'processing' && 'border-emerald-200 bg-white shadow-sm ring-1 ring-emerald-100',
+        status === 'pending' && 'border-slate-100 bg-slate-50/70',
       )}
-      <span className={`text-sm ${status === 'processing' ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-        {title}
-      </span>
+    >
+      <div
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
+          status === 'completed' && 'bg-emerald-100 text-emerald-700',
+          status === 'processing' && 'bg-emerald-600 text-white',
+          status === 'pending' && 'bg-white text-slate-400 ring-1 ring-slate-200',
+        )}
+      >
+        {status === 'completed' ? (
+          <Check className="h-4 w-4" />
+        ) : status === 'processing' ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Icon className="h-4 w-4" />
+        )}
+      </div>
+      <div className="min-w-0">
+        <p
+          className={cn(
+            'text-sm font-semibold',
+            status === 'pending' ? 'text-slate-500' : 'text-slate-900',
+          )}
+        >
+          {step.title}
+        </p>
+        <p className="mt-0.5 text-xs leading-5 text-slate-500">{step.description}</p>
+      </div>
+      {status === 'pending' && <Clock3 className="ml-auto mt-1 h-4 w-4 shrink-0 text-slate-300" />}
     </div>
   );
 }

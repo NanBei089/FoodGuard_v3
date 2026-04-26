@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """项目配置对象，字段通常来自环境变量。"""
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

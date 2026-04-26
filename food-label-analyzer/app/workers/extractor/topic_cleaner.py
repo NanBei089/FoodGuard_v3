@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 import re
@@ -111,6 +114,7 @@ def _canonicalize_line(text: str) -> str:
 
 
 def _merge_broken_lines(lines: list[str]) -> list[str]:
+    """把零散内容合并成完整结果。"""
     merged: list[str] = []
     index = 0
 

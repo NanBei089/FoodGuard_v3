@@ -169,6 +169,44 @@ def test_yolo_detect_returns_bbox_from_mocked_session(
     assert bbox == {"x1": 10, "y1": 20, "x2": 110, "y2": 220, "confidence": 0.9}
 
 
+def test_yolo_detect_parses_obb_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    load_required_env(monkeypatch)
+    yolo_module = importlib.reload(importlib.import_module("app.workers.yolo_worker"))
+
+    class _FakeTensor:
+        def __init__(self, value):
+            self._value = value
+
+        def cpu(self):
+            return self
+
+        def tolist(self):
+            return self._value
+
+    class _FakeObb:
+        def __init__(self):
+            self.xyxy = _FakeTensor([[1513.9, 1844.1, 2729.1, 2669.6]])
+            self.conf = _FakeTensor([0.9714])
+            self.cls = _FakeTensor([0.0])
+
+        def __len__(self):
+            return 1
+
+    class _FakeResult:
+        orig_shape = (5824, 4368)
+        boxes = None
+        obb = _FakeObb()
+
+    parsed = yolo_module.detect_nutrition_bbox_from_results([_FakeResult()])
+
+    assert parsed["found"] is True
+    assert parsed["selected"] == {
+        "xyxy": [1513, 1844, 2730, 2670],
+        "conf": 0.9714,
+        "area": 1005242,
+    }
+
+
 def test_yolo_detect_many_batches_valid_images(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -870,6 +908,57 @@ def test_nutrition_parse_extracts_html_table_when_llm_returns_empty(
     assert result["items"][4]["daily_reference_percent"] == "1%"
 
 
+def test_nutrition_parse_extracts_line_text_when_table_json_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    nutrition_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.nutrition_extractor")
+    )
+    monkeypatch.setattr(
+        nutrition_module,
+        "_llm_parse",
+        lambda table_result, nutrition_raw_text=None: {
+            "items": [],
+            "serving_size": None,
+            "advice_summary": None,
+            "parse_method": "table_recognition" if table_result else "ocr_text",
+        },
+    )
+
+    ocr_text = (
+        "营养成分表\n项目\n每份(48g)\nNRV%\n能量\n976kJ\n12%\n蛋百质\n4.1g\n7%\n"
+        "脂肪\n10.9g\n18%\n反式脂肪(酸)\nOg\n碳水化合物\n27.8g\n%6\n"
+        "膳食纤维\n3.8g\n15%\n钠\n112mg\n6%"
+    )
+
+    result = nutrition_module.parse(
+        {
+            "table_json": None,
+            "ocr_fallback_text": ocr_text,
+            "source": "ocr_runtime",
+        },
+        ocr_text,
+    )
+
+    assert result["parse_method"] == "ocr_text"
+    assert result["serving_size"] == "每份(48g)"
+    assert [item["name"] for item in result["items"]] == [
+        "能量",
+        "蛋白质",
+        "脂肪",
+        "反式脂肪(酸)",
+        "碳水化合物",
+        "膳食纤维",
+        "钠",
+    ]
+    assert result["items"][0]["value"] == "976"
+    assert result["items"][0]["unit"] == "kJ"
+    assert result["items"][1]["daily_reference_percent"] == "7%"
+    assert result["items"][3]["value"] == "0"
+    assert result["items"][4]["daily_reference_percent"] == "6%"
+
+
 def test_nutrition_parse_returns_failed_when_llm_parse_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1427,6 +1516,54 @@ def test_llm_analyze_includes_recognized_ingredient_terms_in_prompt(
     assert "已识别配料清单（共 2 项）" in user_prompt
     assert '"盐"' in user_prompt
     assert '"白砂糖"' in user_prompt
+
+
+def test_llm_analyze_prompt_contains_conservative_risk_calibration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    llm_module = importlib.reload(importlib.import_module("app.workers.llm_worker"))
+    monkeypatch.setattr(llm_module, "validate_configuration", lambda: None)
+    payload = _valid_llm_payload()
+    captured_messages: list[dict[str, str]] = []
+
+    def fake_create(**kwargs):
+        captured_messages.extend(kwargs.get("messages", []))
+        return _llm_stream(json.dumps(payload, ensure_ascii=False))
+
+    monkeypatch.setattr(
+        llm_module,
+        "_get_client",
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=fake_create)
+            )
+        ),
+    )
+
+    llm_module.analyze(
+        "配料：白砂糖、食用油脂制品",
+        {
+            "items": [
+                {
+                    "name": "脂肪",
+                    "value": "10.9",
+                    "unit": "g",
+                    "daily_reference_percent": "18%",
+                }
+            ],
+            "parse_method": "ocr_text",
+        },
+        {"retrieval_results": []},
+        recognized_ingredient_terms=["白砂糖", "食用油脂制品"],
+    )
+
+    user_prompt = captured_messages[-1]["content"]
+    assert "营养风险分级口径" in user_prompt
+    assert "10%-19%" in user_prompt
+    assert "不得写成高风险" in user_prompt
+    assert "心血管负担" in user_prompt
+    assert "不能直接判定为高糖食品" in user_prompt
 
 
 def test_llm_analyze_repairs_invalid_output(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,3 +1,6 @@
+"""数据库和 Redis 的连接管理。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -9,10 +12,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
+    """SQLAlchemy 模型基类，所有数据表模型都继承它。"""
     pass
 
 
 class UUIDPrimaryKeyMixin:
+    """为模型提供 UUID 主键。"""
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
@@ -22,6 +27,7 @@ class UUIDPrimaryKeyMixin:
 
 
 class TimeStampMixin:
+    """为模型提供创建和更新时间。"""
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -36,6 +42,7 @@ class TimeStampMixin:
 
 
 class CreatedAtMixin:
+    """为模型提供创建时间。"""
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,

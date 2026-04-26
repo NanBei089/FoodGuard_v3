@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 import math
@@ -27,6 +30,7 @@ BASE_MODEL_CONFIG = ConfigDict(
 
 
 class ApiResponse(BaseModel, Generic[T]):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
     code: int = Field(default=0, description="业务状态码，0 表示成功", examples=[0])
@@ -47,6 +51,7 @@ def success_response(data: T | None, message: str = "ok") -> ApiResponse[T]:
 
 
 class PageRequest(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
     page: int = Field(default=1, ge=1, description="页码，从 1 开始", examples=[1])
@@ -60,6 +65,7 @@ class PageRequest(BaseModel):
 
 
 class PageResponse(BaseModel, Generic[T]):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
     items: list[T] = Field(description="当前页数据列表")

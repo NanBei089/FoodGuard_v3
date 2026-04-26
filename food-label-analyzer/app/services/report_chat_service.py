@@ -1,3 +1,6 @@
+"""业务逻辑层，负责把接口、数据库和任务流程串起来。"""
+
+
 from __future__ import annotations
 
 import json
@@ -396,6 +399,7 @@ async def delete_report_conversation(
     report_id: uuid.UUID,
     db: AsyncSession,
 ) -> None:
+    """删除指定数据或资源。"""
     await db.execute(
         delete(ReportConversation).where(ReportConversation.report_id == report_id)
     )

@@ -1,3 +1,6 @@
+"""接口入口，只做参数接收、权限检查和响应返回，具体业务交给 service。"""
+
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -37,6 +40,7 @@ async def list_reports(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[ReportListResponseSchema]:
+    """查询一组数据并返回列表。"""
     payload = await get_report_list(current_user.id, page, page_size, db)
     return success_response(payload)
 
@@ -77,6 +81,7 @@ async def remove_report(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
+    """移除指定数据或资源。"""
     await delete_report(report_id, current_user.id, db)
     return success_response(None)
 

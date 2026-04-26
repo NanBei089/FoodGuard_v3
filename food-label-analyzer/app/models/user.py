@@ -1,3 +1,6 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -18,6 +21,7 @@ if TYPE_CHECKING:
 
 
 class User(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "users"
     __table_args__ = (
         Index("idx_users_is_active", "is_active"),
@@ -64,6 +68,7 @@ class User(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
     )
 
     def __repr__(self) -> str:
+        """返回方便调试时查看的文本。"""
         return f"<User id={self.id} email={self.email}>"
 
 

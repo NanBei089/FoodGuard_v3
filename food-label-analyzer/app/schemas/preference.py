@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -12,6 +15,7 @@ HealthCondition = Literal["diabetes", "hypertension", "hyperuricemia", "allergy"
 
 
 class _PreferenceSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
@@ -27,6 +31,7 @@ def _deduplicate_strings(values: list[str]) -> list[str]:
 
 
 class UserPreferenceUpsertRequest(_PreferenceSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     focus_groups: list[FocusGroup] = Field(default_factory=list, description="关注人群")
     health_conditions: list[HealthCondition] = Field(
         default_factory=list, description="健康状况"
@@ -42,6 +47,7 @@ class UserPreferenceUpsertRequest(_PreferenceSchema):
 
 
 class UserPreferenceResponse(_PreferenceSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     focus_groups: list[FocusGroup] = Field(default_factory=list, description="关注人群")
     health_conditions: list[HealthCondition] = Field(
         default_factory=list, description="健康状况"

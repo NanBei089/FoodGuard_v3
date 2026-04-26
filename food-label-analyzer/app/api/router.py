@@ -1,3 +1,6 @@
+"""接口入口，只做参数接收、权限检查和响应返回，具体业务交给 service。"""
+
+
 from __future__ import annotations
 
 from fastapi import APIRouter

@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 import json
@@ -12,6 +15,7 @@ logger = structlog.get_logger(__name__)
 
 
 def _ensure_file(path: str | Path) -> Path:
+    """确认给定路径确实是一个存在的文件。"""
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"图片文件不存在: {file_path}")
@@ -315,6 +319,7 @@ def _html_table_to_structured(html_content: str) -> list[list[str]]:
     return rows
 
 def _convert_table_to_nutrition_json(rows: list[list[str]]) -> dict[str, Any] | None:
+    """转换数据格式。"""
     if not rows:
         return None
     return {"rows": rows}

@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 import structlog
@@ -80,6 +83,7 @@ def _translate_validation_message(field: str, error: dict[str, object]) -> str:
 
 
 def _format_validation_errors(exc: RequestValidationError) -> list[dict[str, str]]:
+    """把数据整理成展示或输出需要的格式。"""
     formatted: list[dict[str, str]] = []
     for error in exc.errors():
         loc = error.get("loc", ())
@@ -109,6 +113,7 @@ def _summarize_validation_errors(errors: list[dict[str, str]]) -> str:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    """把项目里的异常类型注册到 FastAPI，让接口能返回统一格式。"""
     @app.exception_handler(AppBaseException)
     async def app_base_exception_handler(
         request: Request,

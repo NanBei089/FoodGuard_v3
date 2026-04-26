@@ -1,3 +1,6 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -27,6 +30,7 @@ if TYPE_CHECKING:
 
 
 class Report(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "reports"
     __table_args__ = (
         CheckConstraint("score >= 0 AND score <= 100", name="ck_reports_score_range"),

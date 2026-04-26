@@ -1,3 +1,6 @@
+"""配料表解析器，负责从 OCR 文本里找到配料段并拆成配料项。"""
+
+
 from __future__ import annotations
 
 import html
@@ -161,6 +164,7 @@ def normalize_ingredients_text(full_raw_text: str) -> str:
 
 
 def split_ingredients(text: str) -> list[str]:
+    """把一段内容拆成多个片段。"""
     items: list[str] = []
     current: list[str] = []
     depth = 0
@@ -218,6 +222,7 @@ def expand_compound_ingredients(items: list[str]) -> list[str]:
 
 
 def _merge_fragmented_ingredient_terms(items: list[str]) -> list[str]:
+    """把零散内容合并成完整结果。"""
     merged: list[str] = []
     index = 0
 
@@ -262,6 +267,7 @@ def _llm_extract(full_raw_text: str) -> list[str]:
 
 
 def extract(full_raw_text: str) -> tuple[list[str], str]:
+    """从 OCR 文本中提取配料清单。"""
     normalized_text = _sanitize_source_text(full_raw_text)
     if not normalized_text:
         return [], ""

@@ -1,3 +1,6 @@
+"""接口入口，只做参数接收、权限检查和响应返回，具体业务交给 service。"""
+
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -82,6 +85,7 @@ async def delete_me(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[None]:
+    """删除指定数据或资源。"""
     await deactivate_user(current_user, db)
     return success_response(None)
 

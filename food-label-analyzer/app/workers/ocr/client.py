@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 import json
@@ -17,6 +20,7 @@ _RESULT_DOWNLOAD_RETRY_DELAY_S = 1.0
 
 
 class PaddleOCRAPIClient:
+    """保存 `PaddleOCRAPIClient` 相关的数据和方法。"""
     def __init__(self, config: OCRConfig) -> None:
         self.config = config
         if not config.job_url.strip():

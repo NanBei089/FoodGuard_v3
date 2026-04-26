@@ -1,3 +1,6 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -16,6 +19,7 @@ if TYPE_CHECKING:
 
 
 class ReportConversation(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "report_conversations"
     __table_args__ = (
         Index("idx_report_conversations_user_id_updated_at", "user_id", "updated_at"),

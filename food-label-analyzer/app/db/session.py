@@ -1,3 +1,6 @@
+"""数据库和 Redis 的连接管理。"""
+
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Generator

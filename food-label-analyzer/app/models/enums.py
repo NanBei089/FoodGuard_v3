@@ -1,11 +1,14 @@
+"""数据库表对应的 ORM 模型。"""
+
+
 from __future__ import annotations
 
 import enum
 
 
 class TaskStatus(str, enum.Enum):
-    """Forward-looking task status enum reserved for DOC-02 and DOC-04."""
 
+    """数据库表模型，字段基本对应表里的列。"""
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -13,15 +16,15 @@ class TaskStatus(str, enum.Enum):
 
 
 class VerificationType(str, enum.Enum):
-    """Forward-looking email verification type enum reserved for DOC-02 and DOC-03."""
 
+    """数据库表模型，字段基本对应表里的列。"""
     REGISTER = "register"
     RESET_PASSWORD = "reset_password"
 
 
 class NutritionParseSource(str, enum.Enum):
-    """Forward-looking nutrition parse source enum reserved for DOC-05 and DOC-06."""
 
+    """数据库表模型，字段基本对应表里的列。"""
     TABLE_RECOGNITION = "table_recognition"
     OCR_TEXT = "ocr_text"
     LLM_FALLBACK = "llm_fallback"

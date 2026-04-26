@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -16,10 +19,12 @@ from app.schemas.common import BASE_MODEL_CONFIG, PageResponse
 
 
 class _ReportSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
 class AnalysisSchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     score: int = Field(description="Overall health score", examples=[85])
     summary: str | None = Field(
         default=None,
@@ -47,6 +52,7 @@ class AnalysisSchema(_ReportSchema):
 
 
 class RagSummarySchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     total_ingredients: int = Field(description="Total ingredient count", examples=[6])
     retrieved_count: int = Field(description="Ingredients matched in RAG", examples=[4])
     high_match_count: int = Field(description="High-confidence matches", examples=[3])
@@ -55,6 +61,7 @@ class RagSummarySchema(_ReportSchema):
 
 
 class NutritionTableRowSchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     nutrient_key: str = Field(description="Canonical nutrient key", examples=["sodium"])
     name_cn: str = Field(description="Chinese nutrient label", examples=["钠"])
     name_en: str | None = Field(
@@ -88,6 +95,7 @@ class NutritionTableRowSchema(_ReportSchema):
 
 
 class NutritionTableSchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     title: str = Field(default="营养成分表", description="Section title")
     subtitle: str | None = Field(
         default=None,
@@ -118,6 +126,7 @@ class NutritionTableSchema(_ReportSchema):
 
 
 class ReportListItemSchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     report_id: UUID = Field(description="Report identifier")
     task_id: UUID = Field(description="Task identifier")
     score: int = Field(description="Overall health score", examples=[85])
@@ -134,10 +143,12 @@ class ReportListItemSchema(_ReportSchema):
 
 
 class ReportListResponseSchema(PageResponse[ReportListItemSchema]):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
 class ReportDetailResponseSchema(_ReportSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     report_id: UUID = Field(description="Report identifier")
     task_id: UUID = Field(description="Task identifier")
     image_url: str = Field(

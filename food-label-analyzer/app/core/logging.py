@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 import logging

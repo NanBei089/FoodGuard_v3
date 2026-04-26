@@ -1,3 +1,6 @@
+"""食品标签分析的主流程：下载图片、检测区域、OCR、解析、检索、生成报告。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -17,6 +20,7 @@ if TYPE_CHECKING:
 
 
 class AnalysisTask(UUIDPrimaryKeyMixin, TimeStampMixin, Base):
+    """数据库表模型，字段基本对应表里的列。"""
     __tablename__ = "analysis_tasks"
     __table_args__ = (
         Index("idx_analysis_tasks_user_id", "user_id"),

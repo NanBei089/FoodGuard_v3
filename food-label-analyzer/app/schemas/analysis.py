@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -50,10 +53,12 @@ def sanitize_error_message(internal_error: str | None) -> str | None:
 
 
 class _AnalysisSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
 class TaskCreateResponse(_AnalysisSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     task_id: UUID = Field(description="任务 ID")
     status: Literal["queued"] = Field(
         default="queued", description="对外任务状态", examples=["queued"]
@@ -64,6 +69,7 @@ class TaskCreateResponse(_AnalysisSchema):
 
 
 class TaskStatusResponse(_AnalysisSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     task_id: UUID = Field(description="任务 ID")
     status: Literal["queued", "processing", "completed", "failed"] = Field(
         description="对外任务状态",

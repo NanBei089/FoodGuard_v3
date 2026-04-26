@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 import uuid
@@ -21,6 +24,7 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """校验输入数据或凭证是否有效。"""
     return pwd_context.verify(plain_password, hashed_password)
 
 

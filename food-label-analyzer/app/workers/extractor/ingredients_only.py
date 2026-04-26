@@ -1,3 +1,6 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 from typing import Any
@@ -60,6 +63,7 @@ def build_ingredients_output(
 
 
 def _split_ingredient_terms(text: str) -> list[str]:
+    """把一段内容拆成多个片段。"""
     segment = _prepare_ingredient_segment(text)["text"]
     if not segment:
         return []
@@ -149,6 +153,7 @@ def _expand_token(token: str) -> list[str]:
 
 
 def _merge_fragmented_tokens(tokens: list[str]) -> list[str]:
+    """把零散内容合并成完整结果。"""
     merged: list[str] = []
     index = 0
 
@@ -171,6 +176,7 @@ def _merge_fragmented_tokens(tokens: list[str]) -> list[str]:
 
 
 def _split_top_level(text: str) -> list[str]:
+    """把一段内容拆成多个片段。"""
     tokens: list[str] = []
     buffer: list[str] = []
     depth = 0

@@ -1,3 +1,6 @@
+"""YOLO 相关工具，负责找营养成分表、裁剪图片和遮罩图片。"""
+
+
 from __future__ import annotations
 
 import importlib.util
@@ -19,6 +22,7 @@ TABLE_NUM = 0
 
 
 def _ensure_file(path: str | Path, label: str) -> Path:
+    """确认给定路径确实是一个存在的文件。"""
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"{label}不存在: {file_path}")
@@ -28,6 +32,7 @@ def _ensure_file(path: str | Path, label: str) -> Path:
 
 
 def _clamp_bbox(raw_xyxy: Sequence[float], img_w: int, img_h: int) -> list[int]:
+    """把检测框限制在图片尺寸范围内。"""
     if len(raw_xyxy) != 4:
         raise ValueError(f"bbox 长度必须为 4，当前为 {len(raw_xyxy)}")
 
@@ -39,6 +44,7 @@ def _clamp_bbox(raw_xyxy: Sequence[float], img_w: int, img_h: int) -> list[int]:
 
 
 def _bbox_area(xyxy: Sequence[int]) -> int:
+    """计算检测框面积。"""
     width = max(0, xyxy[2] - xyxy[0])
     height = max(0, xyxy[3] - xyxy[1])
     return width * height
@@ -52,6 +58,7 @@ def detect_nutrition_bbox(
     imgsz: int = 640,
     select_top_k: int = 5,
 ) -> dict[str, Any]:
+    """用给定 YOLO 模型检测图片里的营养成分表。"""
     model_file = _ensure_file(model_path, "模型文件")
     image_file = _ensure_file(image_path, "图片文件")
 
@@ -75,7 +82,7 @@ def detect_nutrition_bbox(
         raise RuntimeError("YOLO 结果缺少原图尺寸信息。")
 
     img_h, img_w = int(result.orig_shape[0]), int(result.orig_shape[1])
-    boxes = result.boxes
+    boxes = _prediction_boxes(result)
 
     response: dict[str, Any] = {
         "found": False,
@@ -139,6 +146,7 @@ def detect_nutrition_bbox_from_results(
     results: Any,
     select_top_k: int = 5,
 ) -> dict[str, Any]:
+    """把 YOLO 原始结果整理成统一的检测框结果。"""
     response: dict[str, Any] = {
         "found": False,
         "image_path": "",
@@ -157,10 +165,10 @@ def detect_nutrition_bbox_from_results(
         raise RuntimeError("YOLO 结果缺少原图尺寸信息。")
 
     img_h, img_w = int(result.orig_shape[0]), int(result.orig_shape[1])
-    boxes = result.boxes
     response["img_w"] = img_w
     response["img_h"] = img_h
 
+    boxes = _prediction_boxes(result)
     if boxes is None or len(boxes) == 0:
         return response
 
@@ -205,11 +213,28 @@ def detect_nutrition_bbox_from_results(
     return response
 
 
+def _prediction_boxes(result: Any) -> Any:
+    """优先读取 OBB 旋转框结果，没有时再读取普通检测框。"""
+    obb = getattr(result, "obb", None)
+    if obb is not None and len(obb) > 0 and getattr(obb, "xyxy", None) is not None:
+        return obb
+    boxes = getattr(result, "boxes", None)
+    if boxes is not None and len(boxes) > 0:
+        return boxes
+    return None
+
+
+def _model_task_for_path(model_path: str | Path) -> str:
+    """根据模型文件名判断应该按普通检测还是 OBB 检测加载。"""
+    return "obb" if "obb" in Path(model_path).stem.lower() else "detect"
+
+
 _MODEL_INSTANCE: YOLO | None = None
 _model_lock = threading.Lock()
 
 
 def _get_model() -> YOLO:
+    """懒加载 YOLO 模型，避免每次请求都重新加载。"""
     global _MODEL_INSTANCE
     if _MODEL_INSTANCE is None:
         with _model_lock:
@@ -223,7 +248,7 @@ def _get_model() -> YOLO:
                     raise RuntimeError(
                         "onnx package is required for YOLO ONNX models but is not installed"
                     )
-                _MODEL_INSTANCE = YOLO(model_path, task="detect")
+                _MODEL_INSTANCE = YOLO(model_path, task=_model_task_for_path(model_path))
     return _MODEL_INSTANCE
 
 
@@ -242,6 +267,7 @@ def warmup() -> None:
 
 
 def _selected_result_to_bbox(result: dict[str, Any]) -> dict[str, int | float] | None:
+    """把内部检测结果转成简单的 bbox 字典。"""
     if result["found"] and result["selected"] is not None:
         xyxy = result["selected"]["xyxy"]
         return {
@@ -257,6 +283,7 @@ def _selected_result_to_bbox(result: dict[str, Any]) -> dict[str, int | float] |
 def _bbox_from_model_result(
     result: Any, select_top_k: int
 ) -> dict[str, int | float] | None:
+    """从单张图片的模型结果里取出最终检测框。"""
     try:
         parsed = detect_nutrition_bbox_from_results(
             [result],
@@ -271,6 +298,7 @@ def _bbox_from_model_result(
 def detect_many(
     image_bytes_list: Sequence[bytes], conf: float | None = None
 ) -> list[dict[str, int | float] | None]:
+    """批量检测图片里的营养成分表位置。"""
     settings = get_settings()
     if conf is None:
         conf = settings.YOLO_CONFIDENCE_THRESHOLD
@@ -348,10 +376,12 @@ def detect_many(
 def detect(
     image_bytes: bytes, conf: float | None = None
 ) -> dict[str, int | float] | None:
+    """检测单张图片里的营养成分表位置。"""
     return detect_many([image_bytes], conf=conf)[0]
 
 
 def crop_image(image_bytes: bytes, bbox: dict, padding: int | None = None) -> bytes:
+    """按检测框把营养成分表裁出来。"""
     if padding is None:
         settings = get_settings()
         padding = settings.YOLO_CROP_PADDING
@@ -374,6 +404,7 @@ def crop_image(image_bytes: bytes, bbox: dict, padding: int | None = None) -> by
 
 
 def mask_image(image_bytes: bytes, bbox: dict, padding: int | None = None) -> bytes:
+    """把原图中的营养成分表区域盖白。"""
     if padding is None:
         settings = get_settings()
         padding = settings.YOLO_CROP_PADDING

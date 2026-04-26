@@ -1,4 +1,5 @@
-"""Aggregate model imports for Alembic metadata registration."""
+"""数据库表对应的 ORM 模型。"""
+
 
 from app.models.analysis_task import AnalysisTask
 from app.models.email_verification import EmailVerification

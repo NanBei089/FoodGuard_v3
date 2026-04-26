@@ -1,3 +1,6 @@
+"""业务逻辑层，负责把接口、数据库和任务流程串起来。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -33,6 +36,7 @@ async def update_user_profile(
     avatar_url: str | None,
     db: AsyncSession,
 ) -> UserProfileResponse:
+    """更新已有数据或状态。"""
     if display_name is not None:
         user.display_name = display_name
     if avatar_url is not None:

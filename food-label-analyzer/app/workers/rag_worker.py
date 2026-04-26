@@ -1,3 +1,6 @@
+"""RAG 检索模块，负责用向量检索配料和标准库里的相关信息。"""
+
+
 from __future__ import annotations
 
 import re

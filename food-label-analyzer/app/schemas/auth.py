@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 import re
@@ -8,6 +11,7 @@ from app.schemas.common import BASE_MODEL_CONFIG
 
 
 class _AuthSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
@@ -27,6 +31,7 @@ def validate_password_strength(password: str) -> str:
 
 
 class SendCodeRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     email: EmailStr = Field(description="Email address", examples=["user@example.com"])
 
     @field_validator("email", mode="before")
@@ -36,6 +41,7 @@ class SendCodeRequest(_AuthSchema):
 
 
 class RegisterRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     email: EmailStr = Field(description="Email address", examples=["user@example.com"])
     code: str = Field(
         min_length=6,
@@ -63,6 +69,7 @@ class RegisterRequest(_AuthSchema):
 
 
 class LoginRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     email: EmailStr = Field(description="Email address", examples=["user@example.com"])
     password: str = Field(
         min_length=1, description="Password", examples=["StrongPass123"]
@@ -75,18 +82,21 @@ class LoginRequest(_AuthSchema):
 
 
 class RefreshTokenRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     refresh_token: str = Field(
         min_length=1, description="Refresh token", examples=["eyJhbGciOi..."]
     )
 
 
 class LogoutRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     refresh_token: str = Field(
         min_length=1, description="Refresh token to revoke", examples=["eyJhbGciOi..."]
     )
 
 
 class ForgotPasswordRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     email: EmailStr = Field(description="Email address", examples=["user@example.com"])
 
     @field_validator("email", mode="before")
@@ -96,6 +106,7 @@ class ForgotPasswordRequest(_AuthSchema):
 
 
 class ResetPasswordRequest(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     token: str = Field(
         min_length=1, description="Password reset token", examples=["reset-token-value"]
     )
@@ -113,6 +124,7 @@ class ResetPasswordRequest(_AuthSchema):
 
 
 class TokenResponse(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     access_token: str = Field(description="Access token", examples=["eyJhbGciOi..."])
     refresh_token: str = Field(description="Refresh token", examples=["eyJhbGciOi..."])
     token_type: str = Field(
@@ -122,6 +134,7 @@ class TokenResponse(_AuthSchema):
 
 
 class CooldownResponse(_AuthSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     cooldown_seconds: int = Field(
         ge=0,
         description="Cooldown duration in seconds before the next request",

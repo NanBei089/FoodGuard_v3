@@ -1,3 +1,6 @@
+"""项目通用能力，比如配置、日志、安全、异常和监控。"""
+
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
@@ -149,6 +152,7 @@ def record_analysis_task_metrics(
     total_elapsed_ms: int,
     timings: dict[str, int],
 ) -> None:
+    """记录运行状态，方便后续监控或排查。"""
     increment_counter("analysis_task.status", {"status": status})
     observe_histogram("analysis_task.total_ms", total_elapsed_ms)
     _analysis_task_status_counter.labels(status=status).inc()
@@ -167,6 +171,7 @@ def record_external_dependency_error(
     operation: str,
     error_type: str,
 ) -> None:
+    """记录运行状态，方便后续监控或排查。"""
     increment_counter(
         "external_dependency_errors",
         {

@@ -1,9 +1,13 @@
+"""OCR、YOLO、RAG、LLM 等外部能力的封装。"""
+
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
 
 class SuggestedQuestionsOutput(BaseModel):
+    """保存 `SuggestedQuestionsOutput` 相关的数据和方法。"""
     questions: list[str] = Field(default_factory=list)
 
     @field_validator("questions", mode="before")

@@ -1,3 +1,6 @@
+"""食品标签分析的主流程：下载图片、检测区域、OCR、解析、检索、生成报告。"""
+
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -50,6 +53,7 @@ T = TypeVar("T")
 
 @dataclass
 class AnalysisContext:
+    """保存一次分析任务执行过程中共用的数据。"""
     task_id: str
     image_key: str
     user_id: str
@@ -71,7 +75,9 @@ class AnalysisContext:
 
 
 class _SupportsModelDump(Protocol):
-    def model_dump(self) -> dict[str, Any]: ...
+    """表示可以导出为普通字典的对象。"""
+    def model_dump(self) -> dict[str, Any]:
+        ...
 
 
 @overload
@@ -95,6 +101,7 @@ def _to_plain_data(value: T) -> T: ...
 
 
 def _to_plain_data(value: Any) -> Any:
+    """把 Pydantic 模型、字典、列表等统一转成普通 Python 数据。"""
     if value is None:
         return None
     if hasattr(value, "model_dump"):
@@ -109,6 +116,7 @@ def _to_plain_data(value: Any) -> Any:
 
 
 def _require_dict_payload(payload_name: str, value: Any) -> dict[str, Any]:
+    """确认某一步输出的是字典；不是字典就认为流程数据不合法。"""
     plain_value = _to_plain_data(value)
     if not isinstance(plain_value, dict):
         raise AnalysisPayloadError(f"{payload_name} payload must be a dict")
@@ -120,6 +128,7 @@ def _calculate_rule_based_score(
     rag_results_json: dict[str, Any],
     llm_output_json: dict[str, Any],
 ) -> int:
+    """用规则评分器重新计算健康分，避免直接相信大模型给的分数。"""
     raw_ingredients = llm_output_json.get("ingredients")
     if not isinstance(raw_ingredients, list):
         raise AnalysisPayloadError("llm ingredients payload must be a list")
@@ -139,12 +148,14 @@ def _calculate_rule_based_score(
 
 
 def _elapsed_ms_since(started_at: float) -> int:
+    """计算从开始时间到现在过了多少毫秒。"""
     return int((perf_counter() - started_at) * 1000)
 
 
 def _record_step_timing(
     context: AnalysisContext, timing_key: str, started_at: float
 ) -> None:
+    """把某个分析步骤的耗时记到任务上下文里。"""
     context.timings[timing_key] = int((perf_counter() - started_at) * 1000)
 
 
@@ -154,6 +165,7 @@ def _record_task_attempt_metrics(
     started_at: float,
     timings: dict[str, int],
 ) -> None:
+    """把一次任务尝试的状态和耗时写进监控指标。"""
     record_analysis_task_metrics(
         status=status,
         total_elapsed_ms=_elapsed_ms_since(started_at),
@@ -162,6 +174,7 @@ def _record_task_attempt_metrics(
 
 
 def _record_retryable_dependency_error(exc: Exception, *, operation: str) -> None:
+    """把可重试的外部依赖异常记录到监控里。"""
     if isinstance(exc, OCRServiceError):
         service = "ocr"
     elif isinstance(exc, LLMServiceError):
@@ -217,12 +230,14 @@ def _run_llm(
 
 
 def _download_source_image(context: AnalysisContext) -> None:
+    """从对象存储下载用户上传的原图。"""
     step_started = perf_counter()
     context.image_bytes = _download_image(context.image_key)
     _record_step_timing(context, "download_ms", step_started)
 
 
 def _detect_and_prepare_images(context: AnalysisContext) -> None:
+    """用 YOLO 找营养成分表，并准备裁剪图和遮罩图。"""
     step_started = perf_counter()
     context.bbox = yolo_worker.detect(context.image_bytes)
     context.cropped_image = (
@@ -239,6 +254,7 @@ def _detect_and_prepare_images(context: AnalysisContext) -> None:
 
 
 def _run_ocr_step(context: AnalysisContext) -> None:
+    """根据有没有检测框选择 OCR 策略。"""
     step_started = perf_counter()
     if context.bbox:
         context.full_text_result, context.table_result = _run_ocr_with_bbox_fallback(
@@ -268,6 +284,7 @@ def _run_ocr_step(context: AnalysisContext) -> None:
 
 
 def _parse_nutrition_step(context: AnalysisContext) -> None:
+    """解析营养成分表，得到后续评分要用的营养数据。"""
     step_started = perf_counter()
     table_result = context.table_result
     fallback_parts: list[str] = []
@@ -287,6 +304,7 @@ def _parse_nutrition_step(context: AnalysisContext) -> None:
 
 
 def _extract_ingredients_step(context: AnalysisContext) -> None:
+    """从 OCR 全文中提取配料表。"""
     step_started = perf_counter()
     context.ingredient_terms, context.ingredients_text = ingredient_extractor.extract(
         context.full_text
@@ -295,6 +313,7 @@ def _extract_ingredients_step(context: AnalysisContext) -> None:
 
 
 def _retrieve_rag_step(context: AnalysisContext) -> None:
+    """用配料词去知识库里检索相关标准和说明。"""
     step_started = perf_counter()
     rag_output = _run_rag(context.ingredient_terms, context.ingredients_text)
     context.rag_results_json = _require_dict_payload("rag", rag_output)
@@ -302,6 +321,7 @@ def _retrieve_rag_step(context: AnalysisContext) -> None:
 
 
 def _run_llm_step(context: AnalysisContext) -> None:
+    """调用大模型生成报告主体，并写入规则评分结果。"""
     step_started = perf_counter()
     llm_output = _run_llm(
         context.full_text,
@@ -326,6 +346,7 @@ def _run_llm_step(context: AnalysisContext) -> None:
 
 
 def _persist_result_step(context: AnalysisContext) -> None:
+    """保存分析产物，并把报告写入数据库。"""
     if context.full_text_result is None:
         raise AnalysisPayloadError("full_text_result is missing")
 
@@ -355,6 +376,7 @@ def _persist_result_step(context: AnalysisContext) -> None:
 
 
 def run_analysis_pipeline(task_id: str, image_key: str, user_id: str) -> AnalysisContext:
+    """按顺序跑完整个图片分析流程。"""
     context = AnalysisContext(task_id=task_id, image_key=image_key, user_id=user_id)
     _download_source_image(context)
     _detect_and_prepare_images(context)
@@ -376,6 +398,7 @@ def run_analysis_pipeline(task_id: str, image_key: str, user_id: str) -> Analysi
 def process_image_task(
     self, task_id: str, image_key: str, user_id: str
 ) -> dict[str, Any]:
+    """Celery 执行入口，负责跑分析任务并处理重试、超时和失败状态。"""
     started_at = perf_counter()
     logger.info(
         "analysis_task_started",

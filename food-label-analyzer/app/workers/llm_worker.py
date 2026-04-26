@@ -1,3 +1,6 @@
+"""大模型分析模块，负责把 OCR、营养和 RAG 数据整理成健康分析 JSON。"""
+
+
 from __future__ import annotations
 
 import json
@@ -162,6 +165,7 @@ def analyze(
     recognized_ingredient_terms: list[str] | None = None,
     ingredients_text: str | None = None,
 ) -> dict[str, Any]:
+    """调用大模型生成健康分析报告。"""
     validate_configuration()
     settings = get_settings()
     client = _get_client()

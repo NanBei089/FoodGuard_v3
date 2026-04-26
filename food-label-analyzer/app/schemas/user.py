@@ -1,3 +1,6 @@
+"""接口和任务之间传递的数据结构。"""
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -10,6 +13,7 @@ from app.schemas.common import BASE_MODEL_CONFIG
 
 
 class _UserSchema(BaseModel):
+    """接口数据结构，用来校验请求或整理响应。"""
     model_config = BASE_MODEL_CONFIG
 
 
@@ -21,6 +25,7 @@ def _normalize_optional_text(value: str | None) -> str | None:
 
 
 class UserProfileResponse(_UserSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     user_id: UUID = Field(description="当前用户 ID")
     email: str = Field(description="当前用户邮箱", examples=["user@example.com"])
     display_name: str | None = Field(
@@ -38,6 +43,7 @@ class UserProfileResponse(_UserSchema):
 
 
 class UpdateUserProfileRequest(_UserSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     display_name: str | None = Field(
         default=None, min_length=1, max_length=64, description="显示名称"
     )
@@ -52,6 +58,7 @@ class UpdateUserProfileRequest(_UserSchema):
 
 
 class ChangePasswordRequest(_UserSchema):
+    """接口数据结构，用来校验请求或整理响应。"""
     current_password: str = Field(
         min_length=1, description="当前密码", examples=["OldPass123"]
     )

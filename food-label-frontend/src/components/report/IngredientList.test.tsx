@@ -54,6 +54,37 @@ describe('IngredientList', () => {
     expect(within(detailSection as HTMLElement).queryByText(/产品类别：复合果蔬汁饮料/)).toBeNull();
   });
 
+  it('renders the raw ingredient text section before the risk distribution section', () => {
+    render(
+      <IngredientList
+        ingredientsText={'配料表：水、白砂糖、食用香精'}
+        ingredients={[
+          {
+            name: '水',
+            risk: 'safe',
+            description: '常见食品配料。',
+          },
+          {
+            name: '白砂糖',
+            risk: 'warning',
+            description: '过量摄入可能增加健康负担。',
+          },
+          {
+            name: '食用香精',
+            risk: 'safe',
+            description: '用于增强风味。',
+          },
+        ]}
+      />,
+    );
+
+    const sectionTitles = screen
+      .getAllByRole('heading', { level: 4 })
+      .map((heading) => heading.textContent);
+
+    expect(sectionTitles).toEqual(['识别到的原始配料信息', '配料风险分布', '配料说明']);
+  });
+
   it('only renders keywords from the ingredient label section', () => {
     render(
       <IngredientList

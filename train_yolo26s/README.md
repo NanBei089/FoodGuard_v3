@@ -20,14 +20,13 @@ runs/                 训练输出
 tests/                当前训练脚本与模型结构测试
 ultralytics_ext/      CoordAttention 自定义模块
 split_dataset.py      数据集划分脚本
-train.py              旧水平框训练入口
 train_yolo26n_obb.py  YOLO26n-OBB 轻量对比训练入口
 train_yolo26s_obb.py  YOLO26s-OBB 基线训练入口
 train_yolo26s_obb_tuned.py  YOLO26s-OBB 调参训练入口
 train_yolo26s_obb_p2.py     P2 高分辨率检测头实验入口
 train_yolo26s_obb_coordatt.py       CoordAttention 实验入口
 train_yolo26s_obb_rescoordatt_p3.py P3 残差 CoordAttention 实验入口
-export_onnx.py        旧水平框模型 ONNX 导出脚本
+export_onnx.py        模型 ONNX 导出脚本
 ```
 
 ## PyCharm 运行顺序

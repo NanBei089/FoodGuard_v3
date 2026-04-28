@@ -85,6 +85,13 @@ export const IngredientList = memo(
 
     return (
       <div className="space-y-6">
+        <div className="rounded-xl bg-white p-5">
+          <h4 className="mb-4 text-sm font-semibold text-slate-900">识别到的原始配料信息</h4>
+          <p className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-7 text-slate-600">
+            {ingredientsText || '未识别到原始配料文本'}
+          </p>
+        </div>
+
         <div className="rounded-xl bg-slate-50 p-5">
           <h4 className="mb-4 text-sm font-semibold text-slate-900">配料风险分布</h4>
           <RiskBar
@@ -105,13 +112,6 @@ export const IngredientList = memo(
             total={displayedIngredients.length}
             colorClass="bg-emerald-500"
           />
-        </div>
-
-        <div className="rounded-xl bg-white p-5">
-          <h4 className="mb-4 text-sm font-semibold text-slate-900">识别到的原始配料信息</h4>
-          <p className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-7 text-slate-600">
-            {ingredientsText || '未识别到原始配料文本'}
-          </p>
         </div>
 
         <div>

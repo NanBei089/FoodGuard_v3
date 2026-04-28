@@ -138,7 +138,7 @@ npx vitest run src/pages/Analyzing.test.tsx
 ```
 food-label-analyzer/   FastAPI backend
 food-label-frontend/   React frontend
-train_yolo26s/         YOLO model training (separate git repo, produces yolo26s.onnx)
+train_yolo26s/         YOLO26-OBB nutrition-table detection — training scripts, custom model configs, ONNX export & tests (training runs/models excluded via .gitignore)
 docs/                  Architecture deep-dive docs
 ```
 

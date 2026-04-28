@@ -13,11 +13,11 @@ class x1 y1 x2 y2 x3 y3 x4 y4
 ## 当前文件结构
 
 ```text
-data/                 原始标注数据与说明
+data/                 原始标注数据与说明（images/labels 不提交）
 dataset/              split_dataset.py 生成的训练/验证/测试集
 models/               自定义 YOLO26-OBB 模型结构 YAML
-runs/                 训练输出
-tests/                当前训练脚本与模型结构测试
+runs/                 训练输出（图表、CSV 等结果提交；weights/ 模型文件不提交）
+tests/                训练脚本、模型结构与导出测试
 ultralytics_ext/      CoordAttention 自定义模块
 split_dataset.py      数据集划分脚本
 train_yolo26n_obb.py  YOLO26n-OBB 轻量对比训练入口
@@ -26,7 +26,7 @@ train_yolo26s_obb_tuned.py  YOLO26s-OBB 调参训练入口
 train_yolo26s_obb_p2.py     P2 高分辨率检测头实验入口
 train_yolo26s_obb_coordatt.py       CoordAttention 实验入口
 train_yolo26s_obb_rescoordatt_p3.py P3 残差 CoordAttention 实验入口
-export_onnx.py        模型 ONNX 导出脚本
+export_onnx.py        模型 ONNX 导出脚本（支持元数据自动解析、自定义模块注册、FP16）
 ```
 
 ## PyCharm 运行顺序
@@ -113,13 +113,11 @@ models/yolo26s-obb-rescoordatt-p3.yaml
 
 ## 测试
 
-当前 `tests/` 目录包含两类内容：
+当前 `tests/` 目录包含：
 
-- 与现有根目录训练脚本匹配的测试，例如 `test_train_yolo26s_obb.py`、`test_coordatt_experiment.py`、`test_lightweight_and_p2_experiments.py`
-- 早期规划中实验框架的占位测试，例如 `common/`、`experiments/`、`tools/` 目录相关测试
+- 训练脚本与模型结构测试：`test_train_yolo26s_obb.py`、`test_coordatt_experiment.py`、`test_lightweight_and_p2_experiments.py`
+- ONNX 导出测试：`test_export_onnx.py`（覆盖默认权重路径、元数据解析、CLI 参数、自定义模块注册、输出重命名）
 
 ```powershell
-python -m unittest tests.test_train_yolo26s_obb tests.test_coordatt_experiment tests.test_lightweight_and_p2_experiments
+python -m unittest tests.test_train_yolo26s_obb tests.test_coordatt_experiment tests.test_lightweight_and_p2_experiments tests.test_export_onnx
 ```
-
-说明：本目录当前以根目录训练脚本为准，没有采用 `common/`、`experiments/`、`tools/` 分层框架。`test_train_yolo26s_obb_tuned.py` 和部分 discover 出来的测试仍保留了历史规划预期，不要用 `python -m unittest discover tests` 作为当前结构的验收命令，除非先同步或移除这些历史测试。

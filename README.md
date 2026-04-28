@@ -17,6 +17,7 @@ FoodGuard 是一个面向预包装食品标签场景的智能分析系统。项�
 FoodGuard/
 ├─ food-label-analyzer/     FastAPI 后端服务
 ├─ food-label-frontend/     React 前端应用
+├─ train_yolo26s/           YOLO26-OBB 模型训练与导出
 ├─ docs/                    项目深度说明文档
 ├─ images/                  演示与联调图片样例
 ├─ output/                  调试输出目录

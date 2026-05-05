@@ -36,22 +36,35 @@ export const ANALYSIS_STEP_DEFINITIONS = [
 ] as const;
 
 const PROCESSING_PROGRESS_POINTS = [
-  { elapsedMs: 0, percent: 18 },
-  { elapsedMs: 8_000, percent: 30 },
-  { elapsedMs: 22_000, percent: 48 },
-  { elapsedMs: 45_000, percent: 66 },
-  { elapsedMs: 75_000, percent: 82 },
-  { elapsedMs: 120_000, percent: 90 },
+  { elapsedMs: 0, percent: 8 },
+  { elapsedMs: 8_000, percent: 22 },
+  { elapsedMs: 22_000, percent: 40 },
+  { elapsedMs: 45_000, percent: 62 },
+  { elapsedMs: 75_000, percent: 80 },
+  { elapsedMs: 120_000, percent: 96 },
 ];
 
-function getElapsedMs(createdAt?: string, nowMs = Date.now()) {
+function getElapsedMs(
+  createdAt?: string,
+  nowMs = Date.now(),
+  startedAtMsOverride?: number,
+) {
   const parsedCreatedAtMs = Date.parse(createdAt || '');
-  const startedAtMs = Number.isNaN(parsedCreatedAtMs) ? nowMs : parsedCreatedAtMs;
+  const startedAtMs =
+    typeof startedAtMsOverride === 'number'
+      ? startedAtMsOverride
+      : Number.isNaN(parsedCreatedAtMs)
+        ? nowMs
+        : parsedCreatedAtMs;
   return Math.max(0, nowMs - startedAtMs);
 }
 
-function estimateProcessingPercent(createdAt?: string, nowMs = Date.now()) {
-  const elapsedMs = getElapsedMs(createdAt, nowMs);
+function estimateProcessingPercent(
+  createdAt?: string,
+  nowMs = Date.now(),
+  startedAtMsOverride?: number,
+) {
+  const elapsedMs = getElapsedMs(createdAt, nowMs, startedAtMsOverride);
 
   for (let index = 1; index < PROCESSING_PROGRESS_POINTS.length; index += 1) {
     const previous = PROCESSING_PROGRESS_POINTS[index - 1];
@@ -67,10 +80,14 @@ function estimateProcessingPercent(createdAt?: string, nowMs = Date.now()) {
   return PROCESSING_PROGRESS_POINTS[PROCESSING_PROGRESS_POINTS.length - 1].percent;
 }
 
-export function getAnalysisProgress(status: AnalysisTaskStatus | null, nowMs = Date.now()) {
+export function getAnalysisProgress(
+  status: AnalysisTaskStatus | null,
+  nowMs = Date.now(),
+  processingStartedAtMs?: number,
+) {
   if (!status) {
     return {
-      percent: 6,
+      percent: 2,
       activeStepIndex: 0,
       headline: '初始化分析引擎',
       detail: '正在建立任务状态连接',
@@ -79,7 +96,7 @@ export function getAnalysisProgress(status: AnalysisTaskStatus | null, nowMs = D
 
   if (status.status === 'queued') {
     return {
-      percent: 10,
+      percent: 6,
       activeStepIndex: 0,
       headline: '任务排队中',
       detail: '等待分析服务接收任务',
@@ -104,7 +121,11 @@ export function getAnalysisProgress(status: AnalysisTaskStatus | null, nowMs = D
     };
   }
 
-  const percent = estimateProcessingPercent(status.created_at, nowMs);
+  const percent = estimateProcessingPercent(
+    status.created_at,
+    nowMs,
+    processingStartedAtMs,
+  );
   const activeStepIndex = ANALYSIS_STEP_DEFINITIONS.findIndex(
     (step) => percent <= step.threshold,
   );

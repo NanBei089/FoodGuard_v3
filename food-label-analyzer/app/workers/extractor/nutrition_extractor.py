@@ -20,31 +20,30 @@ from app.workers.extractor.prompts.nutrition_table_llm_parse import (
 logger = structlog.get_logger(__name__)
 
 _VALUE_UNIT_PATTERN = re.compile(
-    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>kJ|kj|KJ|kcal|Kcal|mg|g|ug|μg|克|毫克|千焦)",
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>kJ|kj|KJ|kcal|Kcal|mg|g|ug|μg|mcg|克|毫克|微克|千焦)",
     re.IGNORECASE,
 )
 _PERCENT_PATTERN = re.compile(r"(?:\d+(?:\.\d+)?\s*%|%\s*\d+(?:\.\d+)?)")
-_PLAIN_NUTRIENT_TOKENS = (
-    "反式脂肪",
-    "饱和脂肪",
-    "碳水化合物",
-    "膳食纤维",
-    "胆固醇",
-    "蛋白质",
-    "总脂肪",
-    "维生素",
-    "脂肪",
-    "能量",
-    "热量",
-    "糖",
-    "钠",
-    "钙",
-    "铁",
-    "锌",
-    "钾",
-    "镁",
-)
 _PLAIN_TEXT_HEADER_TOKENS = {"营养成分表", "项目", "NRV", "NRV%"}
+_PLAIN_TEXT_NON_NUTRITION_HINTS = (
+    "净含量",
+    "配料",
+    "保质期",
+    "生产日期",
+    "贮藏",
+    "储存",
+    "食用方法",
+    "经销商",
+    "生产商",
+    "制造商",
+    "原产国",
+    "地址",
+    "电话",
+    "产品类型",
+    "产品名称",
+    "过敏",
+    "致敏",
+)
 
 
 class _NutritionHTMLTableParser(HTMLParser):
@@ -146,7 +145,7 @@ def _normalize_unit(unit: str) -> str:
         return "g"
     if normalized == "毫克":
         return "mg"
-    if lower == "ug":
+    if lower in {"ug", "mcg"} or normalized == "微克":
         return "μg"
     return normalized
 
@@ -295,12 +294,29 @@ def _normalize_plain_nutrient_name(line: str) -> str | None:
     )
     if corrected in _PLAIN_TEXT_HEADER_TOKENS:
         return None
+    if re.search(
+        r"^每\s*(?:份|100\s*(?:g|克|ml|毫升)|\d+\s*(?:g|克|ml|毫升))",
+        corrected,
+        re.I,
+    ):
+        return None
+    if any(hint in corrected for hint in _PLAIN_TEXT_NON_NUTRITION_HINTS):
+        return None
 
     compact = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "", corrected)
-    for token in _PLAIN_NUTRIENT_TOKENS:
-        if token in compact:
-            return corrected
-    return None
+    if not compact or not re.search(r"[a-zA-Z\u4e00-\u9fff]", compact):
+        return None
+
+    if _extract_percent(corrected) == corrected.replace("％", "%"):
+        return None
+
+    measurement_match = _VALUE_UNIT_PATTERN.search(_normalize_ocr_value_text(corrected))
+    if measurement_match is not None:
+        prefix = corrected[: measurement_match.start()].strip()
+        if not prefix:
+            return None
+
+    return corrected
 
 
 def _extract_serving_size_from_lines(lines: list[str]) -> str | None:

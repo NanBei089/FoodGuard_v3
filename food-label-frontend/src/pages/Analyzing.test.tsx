@@ -33,7 +33,7 @@ afterEach(() => {
 describe('Analyzing', () => {
   it('derives a smooth estimated progress from task status and elapsed time', () => {
     expect(getAnalysisProgress(null, Date.parse('2026-04-18T10:00:00Z'))).toMatchObject({
-      percent: 6,
+      percent: 2,
       headline: '初始化分析引擎',
     });
 
@@ -50,7 +50,7 @@ describe('Analyzing', () => {
         Date.parse('2026-04-18T10:00:10Z'),
       ),
     ).toMatchObject({
-      percent: 10,
+      percent: 6,
       headline: '任务排队中',
     });
 
@@ -65,11 +65,12 @@ describe('Analyzing', () => {
           error_message: null,
         },
         Date.parse('2026-04-18T10:00:32Z'),
+        Date.parse('2026-04-18T10:00:32Z'),
       ),
     ).toMatchObject({
-      percent: 48,
-      activeStepIndex: 2,
-      headline: '营养与配料结构化',
+      percent: 8,
+      activeStepIndex: 0,
+      headline: '图像准备与标签定位',
     });
 
     expect(
@@ -113,11 +114,43 @@ describe('Analyzing', () => {
     });
 
     expect(screen.getByText('AI 正在分析食品标签')).toBeTruthy();
+    expect(screen.getByText('8%')).toBeTruthy();
     expect(screen.getByText('OCR 文字与营养表识别')).toBeTruthy();
     expect(screen.getAllByText('营养与配料结构化').length).toBeGreaterThan(0);
     expect(screen.getByText('风险检索与规则评分')).toBeTruthy();
     expect(screen.getByText('生成健康报告')).toBeTruthy();
-    expect(screen.getByText('48%')).toBeTruthy();
+  });
+
+  it('shows 100 percent before redirecting to the report page', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-18T10:00:32Z'));
+    apiGetMock.mockResolvedValue({
+      code: 0,
+      message: 'ok',
+      data: {
+        task_id: 'task-1',
+        status: 'completed',
+        progress_message: '分析完成',
+        created_at: '2026-04-18T10:00:00Z',
+        report_id: 'report-1',
+        error_message: null,
+      },
+    });
+
+    renderAnalyzing();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByText('100%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('report')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(screen.getByText('report')).toBeTruthy();
   });
 
   it('shows an error after repeated polling failures instead of retrying forever', async () => {

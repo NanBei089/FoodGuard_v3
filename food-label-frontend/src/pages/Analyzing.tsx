@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   AlertCircle,
@@ -27,6 +27,7 @@ const INITIAL_POLL_INTERVAL_MS = 1500;
 const MAX_POLL_INTERVAL_MS = 3000;
 const MAX_ANALYSIS_WAIT_MS = 10 * 60 * 1000;
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+const COMPLETION_REDIRECT_DELAY_MS = 450;
 
 type StepStatus = 'pending' | 'processing' | 'completed';
 
@@ -73,14 +74,17 @@ export default function Analyzing() {
   const [status, setStatus] = useState<AnalysisTaskStatus | null>(null);
   const [error, setError] = useState('');
   const previewUrl = sessionStorage.getItem('latest_upload_preview') || '';
+  const processingStartedAtMsRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!taskId) {
       return;
     }
 
+    processingStartedAtMsRef.current = null;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout>;
+    let redirectTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let pollInterval = INITIAL_POLL_INTERVAL_MS;
     let consecutiveFailures = 0;
     const fallbackStartedAtMs = Date.now();
@@ -108,6 +112,9 @@ export default function Analyzing() {
         }
 
         consecutiveFailures = 0;
+        if (res.data.status === 'processing' && processingStartedAtMsRef.current === null) {
+          processingStartedAtMsRef.current = Date.now();
+        }
         setStatus(res.data);
 
         const parsedCreatedAtMs = Date.parse(res.data.created_at || '');
@@ -121,8 +128,14 @@ export default function Analyzing() {
         }
 
         if (res.data.status === 'completed' && res.data.report_id) {
-          revokePreview(previewUrl);
-          navigate(`/reports/${res.data.report_id}`);
+          redirectTimeoutId = setTimeout(() => {
+            if (cancelled) {
+              return;
+            }
+
+            revokePreview(previewUrl);
+            navigate(`/reports/${res.data.report_id}`);
+          }, COMPLETION_REDIRECT_DELAY_MS);
           return;
         }
 
@@ -155,10 +168,17 @@ export default function Analyzing() {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+      if (redirectTimeoutId) {
+        clearTimeout(redirectTimeoutId);
+      }
     };
   }, [navigate, previewUrl, taskId]);
 
-  const progress = getAnalysisProgress(status);
+  const progress = getAnalysisProgress(
+    status,
+    Date.now(),
+    processingStartedAtMsRef.current ?? undefined,
+  );
 
   return (
     <div className="flex min-h-[calc(100vh-220px)] items-center justify-center py-4">

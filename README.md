@@ -53,12 +53,11 @@ FoodGuard/
 ### 1. 后端
 
 ```powershell
-conda activate foodguard-env
 cd food-label-analyzer
-pip install -r requirements-dev.txt
+conda run -n foodguard-env pip install -r requirements-dev.txt
 Copy-Item .env.example .env
-python -m alembic upgrade head
-uvicorn app.main:app --reload
+conda run -n foodguard-env python -m alembic upgrade head
+conda run -n foodguard-env uvicorn app.main:app --reload
 ```
 
 默认地址：
@@ -70,9 +69,8 @@ uvicorn app.main:app --reload
 ### 2. Celery Worker
 
 ```powershell
-conda activate foodguard-env
 cd food-label-analyzer
-celery -A app.tasks.celery_app.celery_app worker -Q analysis --loglevel=info
+conda run -n foodguard-env celery -A app.tasks.celery_app.celery_app worker -Q analysis --loglevel=info
 ```
 
 ### 3. 前端

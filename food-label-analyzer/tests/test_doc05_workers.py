@@ -959,6 +959,50 @@ def test_nutrition_parse_extracts_line_text_when_table_json_missing(
     assert result["items"][4]["daily_reference_percent"] == "6%"
 
 
+def test_nutrition_parse_keeps_unknown_rows_from_plain_text_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_required_env(monkeypatch)
+    nutrition_module = importlib.reload(
+        importlib.import_module("app.workers.extractor.nutrition_extractor")
+    )
+    monkeypatch.setattr(
+        nutrition_module,
+        "_llm_parse",
+        lambda table_result, nutrition_raw_text=None: {
+            "items": [],
+            "serving_size": None,
+            "advice_summary": None,
+            "parse_method": "table_recognition" if table_result else "ocr_text",
+        },
+    )
+
+    ocr_text = (
+        "营养成分表\n项目\n每份(11克)\nNRV%\n能量\n240千焦\n3%\n"
+        "叶酸\n120微克\n30%\n蛋白质\n1.0克\n2%"
+    )
+
+    result = nutrition_module.parse(
+        {
+            "table_json": None,
+            "ocr_fallback_text": ocr_text,
+            "source": "ocr_runtime",
+        },
+        ocr_text,
+    )
+
+    assert result["parse_method"] == "ocr_text"
+    assert result["serving_size"] == "每份(11克)"
+    assert [item["name"] for item in result["items"]] == [
+        "能量",
+        "叶酸",
+        "蛋白质",
+    ]
+    assert result["items"][1]["value"] == "120"
+    assert result["items"][1]["unit"] == "μg"
+    assert result["items"][1]["daily_reference_percent"] == "30%"
+
+
 def test_nutrition_parse_returns_failed_when_llm_parse_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

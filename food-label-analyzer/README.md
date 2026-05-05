@@ -50,28 +50,27 @@
 ### 1. 安装依赖
 
 ```powershell
-conda activate foodguard-env
 cd food-label-analyzer
-pip install -r requirements-dev.txt
+conda run -n foodguard-env pip install -r requirements-dev.txt
 Copy-Item .env.example .env
 ```
 
 ### 2. 初始化数据库
 
 ```powershell
-python -m alembic upgrade head
+conda run -n foodguard-env python -m alembic upgrade head
 ```
 
 ### 3. 启动 API
 
 ```powershell
-uvicorn app.main:app --reload
+conda run -n foodguard-env uvicorn app.main:app --reload
 ```
 
 ### 4. 启动 Worker
 
 ```powershell
-celery -A app.tasks.celery_app.celery_app worker -Q analysis --loglevel=info
+conda run -n foodguard-env celery -A app.tasks.celery_app.celery_app worker -Q analysis --loglevel=info
 ```
 
 说明：

@@ -1,6 +1,6 @@
-# train_yolo26
+# train_yolo26s
 
-这是 FoodGuard 的 YOLO26-OBB 营养成分表检测实验目录。
+这是 FoodGuard 的 YOLO26-OBB 营养成分表检测实验目录，负责训练、对比实验、ONNX 导出与推理前模型准备。
 
 当前数据集使用 **OBB 旋转框格式**，不是普通 YOLO 水平框格式。标签格式为：
 
@@ -16,7 +16,7 @@ class x1 y1 x2 y2 x3 y3 x4 y4
 data/                 原始标注数据与说明（images/labels 不提交）
 dataset/              split_dataset.py 生成的训练/验证/测试集
 models/               自定义 YOLO26-OBB 模型结构 YAML
-runs/                 训练输出（图表、CSV 等结果提交；weights/ 模型文件不提交）
+runs/                 训练输出（图表、CSV 等结果保留；weights/ 模型文件不提交）
 tests/                训练脚本、模型结构与导出测试
 ultralytics_ext/      CoordAttention 自定义模块
 split_dataset.py      数据集划分脚本
@@ -28,6 +28,11 @@ train_yolo26s_obb_coordatt.py       CoordAttention 实验入口
 train_yolo26s_obb_rescoordatt_p3.py P3 残差 CoordAttention 实验入口
 export_onnx.py        模型 ONNX 导出脚本（支持元数据自动解析、自定义模块注册、FP16）
 ```
+
+说明：
+
+- 该目录不直接参与 Web 请求处理，线上分析侧实际消费的是导出的 YOLO ONNX 模型。
+- 训练结果中的 `results.csv`、曲线图和对比实验记录可直接作为论文实验章节素材。
 
 ## PyCharm 运行顺序
 

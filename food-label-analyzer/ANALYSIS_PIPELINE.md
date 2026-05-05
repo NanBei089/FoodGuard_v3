@@ -1,106 +1,321 @@
-# Food Label Analyzer 分析部分链路图
+# Food Label Analyzer 分析链路说明
 
-本文档描述了后端在接收到用户上传的图片后，执行的完整分析链路（基于 `app/tasks/analysis_task.py`）。
+本文档描述 FoodGuard 后端在接收到用户上传图片后，如何完成一次完整的食品标签分析，并最终生成报告。
 
-## 分析流程架构图 (Mermaid)
+## 1. 总体链路
 
 ```mermaid
 graph TD
-    %% 角色与系统节点
-    User((用户/前端))
-    API[FastAPI 接口\n/api/v1/analysis/upload]
+    User((用户))
+    Frontend[前端 Web]
+    API[FastAPI /api/v1/analysis/upload]
     DB[(PostgreSQL)]
-    Redis[(Redis\nCelery Broker)]
-    MinIO[(MinIO\n对象存储)]
-    
-    %% Celery Worker 节点
-    subgraph Celery 分析任务 (process_image_task)
-        Download[1. 下载源图片]
-        
-        subgraph 图像预处理与识别
-            YOLO[2. YOLO 目标检测\n定位营养成分表]
-            Split{是否检测到\n成分表?}
-            Crop[裁剪出成分表图片\n& 遮罩处理原图]
-            
-            OCR_Parallel[3a. 并行 OCR 识别\n(原图去表 + 成分表)]
-            OCR_Full[3b. 单图全量 OCR 识别\n(仅全量文本)]
-        end
-        
-        subgraph 信息提取
-            Nutri_Extract[4. 营养成分提取\n(nutrition_extractor)]
-            Ingre_Extract[5. 配料表文本提取\n(ingredient_extractor)]
-        end
-        
-        subgraph 知识增强与分析
-            RAG[6. RAG 知识检索\n(检索 ChromaDB)]
-            ChromaDB[(ChromaDB\n向量库)]
-            LLM[7. LLM 综合健康分析\n(DeepSeek)]
-        end
-        
-        SaveReport[8. 生成并保存最终报告\n(_complete_task_with_report)]
+    Redis[(Redis / Celery Broker)]
+    MinIO[(MinIO)]
+
+    subgraph AsyncAnalysis[Celery 异步分析任务]
+        Download[下载原图]
+        YOLO[YOLO 定位营养成分表]
+        Split{是否检测到表格区域}
+        Crop[裁剪营养表并遮罩原图]
+        OCR1[全文 OCR]
+        OCR2[营养表 OCR]
+        OCR3[单图 OCR 兜底]
+        Extract[营养与配料提取]
+        RAG[RAG 检索]
+        LLM[LLM 生成分析结论]
+        Score[规则评分兜底]
+        Artifact[保存分析产物]
+        Persist[写入 Report 并更新任务状态]
     end
 
-    %% 主流程线条
-    User -- "1. 上传图片 (UploadFile)" --> API
-    API -- "2. 保存图片文件" --> MinIO
-    API -- "3. 创建 AnalysisTask 记录" --> DB
-    API -- "4. 发送 Celery 任务" --> Redis
-    API -. "5. 返回 task_id" .-> User
-    
-    Redis -- "消费任务" --> Download
-    Download -- "获取图片流" --> MinIO
+    User --> Frontend --> API
+    API --> MinIO
+    API --> DB
+    API --> Redis
+    Redis --> Download
     Download --> YOLO
-    
     YOLO --> Split
-    Split -- "是 (bbox存在)" --> Crop
-    Crop --> OCR_Parallel
-    Split -- "否 (无bbox)" --> OCR_Full
-    
-    OCR_Parallel --> Nutri_Extract
-    OCR_Full --> Nutri_Extract
-    
-    OCR_Parallel --> Ingre_Extract
-    OCR_Full --> Ingre_Extract
-    
-    Ingre_Extract -- "配料词条" --> RAG
-    RAG <--> ChromaDB
-    
-    Nutri_Extract -- "结构化营养数据" --> LLM
-    Ingre_Extract -- "配料表原文本" --> LLM
-    RAG -- "增强知识/添加剂安全性" --> LLM
-    
-    LLM -- "健康评分与建议" --> SaveReport
-    SaveReport -- "更新 Task 状态为 completed\n插入 Report 记录" --> DB
+    Split -->|是| Crop
+    Crop --> OCR1
+    Crop --> OCR2
+    Split -->|否| OCR3
+    OCR1 --> Extract
+    OCR2 --> Extract
+    OCR3 --> Extract
+    Extract --> RAG
+    Extract --> LLM
+    RAG --> LLM
+    LLM --> Score
+    Score --> Artifact
+    Artifact --> Persist
+    Persist --> DB
 ```
 
-## 核心步骤详解
+## 2. 上传与建任务
 
-1. **接口接收阶段 ([app/api/v1/analysis.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/api/v1/analysis.py))**
-   - 校验图片合法性并上传至 MinIO。
-   - 在 PostgreSQL 数据库创建状态为 `pending` (对外 `queued`) 的 `AnalysisTask`。
-   - 通过 Celery 将分析任务推入 `analysis` 队列。
+入口接口：
 
-2. **YOLO 目标检测 ([app/workers/yolo_worker.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/workers/yolo_worker.py))**
-   - 读取图片，使用 `yolo26s.onnx` 模型寻找营养成分表区域（`bbox`）。
-   - 如果找到：生成两张图 —— **仅成分表区域的裁剪图** 和 **原图抹掉成分表的遮罩图**。
+- [app/api/v1/analysis.py](app/api/v1/analysis.py)
 
-3. **OCR 文本识别 ([app/workers/ocr_worker.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/workers/ocr_worker.py))**
-   - 调用 PaddleOCR 接口。
-   - 如果有成分表，执行**双路并发OCR**：一路负责普通文本提取，一路负责表格提取。
-   - 如果无成分表，则只执行单图的全量 OCR 文本提取。
+处理顺序：
 
-4. **信息提取阶段 ([app/workers/extractor](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/workers/extractor))**
-   - **营养成分提取**: 将表格 OCR 结果转化为结构化 JSON 数据（能量、蛋白质、钠等），若无表格则使用全量文本作为 fallback。
-   - **配料表提取**: 使用正则或简单逻辑从 OCR 全量文本中提取出配料表内容及独立配料词条。
+1. 前端把图片上传到 `POST /api/v1/analysis/upload`
+2. 后端读取文件字节并校验：
+   - 文件是否为空
+   - 是否为 `JPG / PNG / WEBP`
+   - 是否超过大小限制
+   - 图片是否损坏
+3. 图片写入 MinIO
+4. 创建 `analysis_tasks` 记录
+5. 生成固定格式的 Celery `task_id`
+6. 向 `analysis.process_image` 投递异步任务
 
-5. **RAG 向量检索 ([app/workers/rag_worker.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/workers/rag_worker.py))**
-   - 使用 Ollama 模型将配料词条转换为向量。
-   - 在本地的 ChromaDB (`gb2760_a1_grouped`) 中进行相似度检索，获取添加剂标准、安全上限及功效分类。
+说明：
 
-6. **大模型综合分析 ([app/workers/llm_worker.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/workers/llm_worker.py))**
-   - 将结构化的营养数据、配料表原文、RAG 检索结果拼接为上下文。
-   - 提交给 DeepSeek 大模型（配置 `DEEPSEEK_MODEL`），由 LLM 根据提示词输出健康打分、人群建议和成分风险汇总。
+- 数据库内部初始状态为 `pending`
+- 对前端暴露的初始状态为 `queued`
+- 如果创建任务或入队失败，会清理已上传的 MinIO 图片
 
-7. **保存结果 ([app/tasks/analysis_task.py](file:///E:/GraduationProject/foodguard/food-label-analyzer/app/tasks/analysis_task.py))**
-   - 解析 LLM 返回的 JSON 结果，写入 `reports` 表。
-   - 更新 `analysis_tasks` 状态为 `completed`，整个异步分析流程结束。
+关键实现：
+
+- [app/services/task_service.py](app/services/task_service.py)
+- [app/services/storage_service.py](app/services/storage_service.py)
+
+## 3. 异步分析任务入口
+
+入口文件：
+
+- [app/tasks/analysis_task.py](app/tasks/analysis_task.py)
+
+Celery 任务：
+
+- 名称：`analysis.process_image`
+- 最大重试次数：`2`
+- 软超时：`270s`
+- 硬超时：`300s`
+
+任务开始后会先把数据库状态更新为 `processing`，结束时写回：
+
+- `completed`
+- `failed`
+
+对 OCR、存储、Embedding、LLM 这类外部依赖错误，任务会优先走有限重试；超过重试次数后才标记失败。
+
+## 4. 图像下载与 YOLO 定位
+
+相关实现：
+
+- [app/tasks/analysis/persistence.py](app/tasks/analysis/persistence.py)
+- [app/workers/yolo_worker.py](app/workers/yolo_worker.py)
+
+步骤：
+
+1. 从 MinIO 下载原图
+2. 使用 YOLO ONNX 模型检测营养成分表区域
+3. 若检测到 bbox：
+   - 裁剪营养成分表图片
+   - 对原图中表格区域做遮罩，尽量减少 OCR 干扰
+4. 若未检测到 bbox：
+   - 直接把原图送入 OCR
+
+说明：
+
+- 运行时使用的是部署模型
+- 训练、对比实验和导出逻辑在仓库 `train_yolo26s/` 目录中单独维护
+
+## 5. OCR 识别策略
+
+相关实现：
+
+- [app/workers/ocr_worker.py](app/workers/ocr_worker.py)
+- [app/tasks/analysis/ocr_strategy.py](app/tasks/analysis/ocr_strategy.py)
+
+当前策略分两种：
+
+### 5.1 检测到营养表时
+
+优先走双路 OCR：
+
+- 一路识别遮罩后的全文文本
+- 一路识别裁剪出的营养成分表
+
+如果双路 OCR 失败，会自动退回顺序 OCR 兜底。
+
+### 5.2 未检测到营养表时
+
+会先识别整张图片的全文文本，再尝试对整图执行营养表识别扫描。
+
+输出主要包括：
+
+- `OCRTextResult`
+- `TableRecognitionResult`
+
+## 6. 结构化提取
+
+相关实现：
+
+- [app/workers/extractor/ingredient_extractor.py](app/workers/extractor/ingredient_extractor.py)
+- [app/workers/extractor/nutrition_extractor.py](app/workers/extractor/nutrition_extractor.py)
+
+### 6.1 配料提取
+
+优先顺序：
+
+1. 基于规则从 OCR 文本中定位“配料表”片段
+2. 对复合配料做拆分和去重
+3. 若规则提取失败，再调用 LLM 做兜底提取
+
+输出：
+
+- `ingredient_terms`：配料词条列表
+- `ingredients_text`：配料原文或提取结果
+
+### 6.2 营养提取
+
+优先顺序：
+
+1. 先尝试让 LLM 解析营养表
+2. 若 LLM 结果为空或不稳定，再回退到结构化规则解析
+3. 若表格结果为空，但全文 OCR 中仍可能包含营养信息，则继续从 OCR 文本兜底
+
+可能的 `parse_method`：
+
+- `table_recognition`
+- `ocr_text`
+- `llm_fallback`
+- `empty`
+- `failed`
+
+## 7. RAG 检索
+
+相关实现：
+
+- [app/workers/rag_worker.py](app/workers/rag_worker.py)
+
+处理逻辑：
+
+1. 将配料词条标准化
+2. 调用 Ollama Embedding 生成向量
+3. 在 ChromaDB 中查询：
+   - 配料知识集合
+   - 标准知识集合
+4. 对检索结果去重、排序、标记匹配质量
+
+输出字段：
+
+- `items_total`
+- `retrieval_results`
+- `match_quality`
+- `similarity_score`
+
+如果 Embedding 或 ChromaDB 失败，会记录监控并尽量返回空结果，而不是让整个链路静默成功。
+
+## 8. LLM 综合分析
+
+相关实现：
+
+- [app/workers/llm_worker.py](app/workers/llm_worker.py)
+- [app/workers/extractor/prompts/food_health_analysis.py](app/workers/extractor/prompts/food_health_analysis.py)
+
+输入包括：
+
+- OCR 全文
+- 结构化营养信息
+- RAG 检索结果
+- 识别出的配料词条
+
+LLM 负责输出：
+
+- 总结文本
+- 风险项
+- 好处项
+- 配料风险解释
+- 不同人群建议
+
+说明：
+
+- LLM 输出必须满足 Pydantic schema 校验
+- 若首次输出无法解析，会进入 repair 重试
+
+## 9. 规则评分兜底
+
+相关实现：
+
+- [app/services/score_calculator.py](app/services/score_calculator.py)
+
+这是当前链路里很重要的一步：
+
+- 大模型可以生成说明和建议
+- 但最终健康分不直接相信 LLM 给出的分数
+- 系统会基于营养、糖、钠、添加剂、过敏原重新计算规则分
+
+这样做的目的：
+
+- 降低大模型分数波动
+- 让评分逻辑更容易解释
+- 便于论文和答辩中说明评分依据
+
+## 10. 分析产物持久化
+
+相关实现：
+
+- [app/tasks/analysis/artifacts.py](app/tasks/analysis/artifacts.py)
+- [app/tasks/analysis/persistence.py](app/tasks/analysis/persistence.py)
+
+会按情况保存的产物包括：
+
+- 原图对象键
+- 检测 bbox JSON
+- 遮罩图
+- 营养表裁剪图
+- OCR 原始结果
+- 营养解析结果
+- RAG 结果
+- LLM 输出结果
+
+最终写入数据库的核心表：
+
+- `analysis_tasks`
+- `reports`
+
+报告中保存的主要字段：
+
+- `ingredients_text`
+- `nutrition_json`
+- `nutrition_parse_source`
+- `rag_results_json`
+- `llm_output_json`
+- `score`
+- `artifact_urls`
+
+## 11. 失败处理与可观测性
+
+系统对以下情况都有显式处理：
+
+- 上传校验失败
+- Celery 入队失败
+- OCR/LLM/Embedding/存储异常
+- 任务超时
+- 不可预期异常
+
+相关监控与可观测性：
+
+- `/health`：依赖健康检查
+- `/metrics`：Prometheus 原始指标
+- `/api/v1/metrics`：认证后的进程内指标快照
+
+任务过程还会记录：
+
+- 总耗时
+- 各步骤耗时
+- 外部依赖错误计数
+
+## 12. 答辩时建议强调的实现点
+
+1. 上传分析为什么做成异步任务，而不是同步接口
+2. 为什么要先 YOLO 定位，再 OCR 识别
+3. 为什么既用了 RAG 又用了规则评分，而不是只依赖大模型
+4. 为什么报告详情既保存结构化结果，也保存中间分析产物
+5. 为什么问答要绑定到单份报告，而不是全局聊天
+
